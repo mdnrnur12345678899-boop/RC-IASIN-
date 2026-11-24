@@ -32,7 +32,7 @@ import kotlinx.coroutines.launch
 
 data class ProxyFormState(
     val editingProfileId: Long = 0L,
-    val label: String = "",
+    val label: String = "RC PROXY",
     val protocol: ProxyProtocol = ProxyProtocol.SOCKS5,
     val host: String = "",
     val portText: String = "1080",

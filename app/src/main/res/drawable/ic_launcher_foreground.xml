@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_netrelay_artwork_1795535639539"
+        android:drawable="@drawable/ic_rcproxy_icon_1795541731901"
         android:gravity="center" />
 </layer-list>

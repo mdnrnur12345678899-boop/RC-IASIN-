@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "NetRelay"
+rootProject.name = "RC Proxy"
 
 include(":app")

@@ -48,7 +48,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -123,109 +122,126 @@ fun HeroTunnelCard(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
         color = Color(0xFF0E1627),
-        border = BorderStroke(1.dp, accentColor.copy(alpha = if (isConnected) 0.5f else 0.25f)),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = if (isConnected) 0.55f else 0.28f)),
         tonalElevation = 4.dp
     ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            Image(
-                painter = painterResource(id = R.drawable.img_relay_mesh_1795535639435),
-                contentDescription = stringResource(R.string.cd_hero_mesh),
-                modifier = Modifier
-                    .matchParentSize()
-                    .alpha(if (isConnected) 0.36f else 0.2f),
-                contentScale = ContentScale.Crop
-            )
-
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // RC PROXY branded hero thumbnail banner
             Box(
                 modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color(0xCC0B101B),
-                                Color(0xE60E1627)
+                    .fillMaxWidth()
+                    .height(126.dp)
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.img_rcproxy_thumb_1795541732380),
+                    contentDescription = "RC PROXY Banner",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color(0xE60E1627)
+                                )
                             )
                         )
+                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = accentColor.copy(alpha = 0.2f),
+                    border = BorderStroke(1.dp, accentColor.copy(alpha = 0.6f)),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = if (isConnected) "ONLINE" else if (isConnecting) "SYNCING" else "RC PROXY",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = accentColor,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
-            )
+                }
+            }
 
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        modifier = Modifier.weight(1f)
+                    Box(
+                        modifier = Modifier.size(56.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier.size(60.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isConnected || isConnecting) {
-                                Canvas(modifier = Modifier.fillMaxSize()) {
-                                    drawCircle(
-                                        color = accentColor.copy(alpha = pulseAlpha),
-                                        radius = (size.minDimension / 2f) * pulseRadius,
-                                        style = Stroke(width = 3.dp.toPx())
-                                    )
-                                }
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .size(46.dp)
-                                    .clip(CircleShape)
-                                    .background(accentColor.copy(alpha = 0.16f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = when (tunnelState.status) {
-                                        TunnelStatus.CONNECTED -> Icons.Rounded.Shield
-                                        TunnelStatus.CONNECTING -> Icons.Rounded.Sync
-                                        TunnelStatus.ERROR -> Icons.Rounded.ErrorOutline
-                                        TunnelStatus.DISCONNECTED -> Icons.Rounded.Lock
-                                    },
-                                    contentDescription = null,
-                                    tint = accentColor,
-                                    modifier = Modifier.size(24.dp)
+                        if (isConnected || isConnecting) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                drawCircle(
+                                    color = accentColor.copy(alpha = pulseAlpha),
+                                    radius = (size.minDimension / 2f) * pulseRadius,
+                                    style = Stroke(width = 3.dp.toPx())
                                 )
                             }
                         }
-
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = when (tunnelState.status) {
-                                    TunnelStatus.DISCONNECTED -> stringResource(R.string.status_disconnected)
-                                    TunnelStatus.CONNECTING -> stringResource(R.string.status_connecting)
-                                    TunnelStatus.CONNECTED -> stringResource(R.string.status_connected)
-                                    TunnelStatus.ERROR -> stringResource(R.string.status_error)
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(accentColor.copy(alpha = 0.16f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = when (tunnelState.status) {
+                                    TunnelStatus.CONNECTED -> Icons.Rounded.Shield
+                                    TunnelStatus.CONNECTING -> Icons.Rounded.Sync
+                                    TunnelStatus.ERROR -> Icons.Rounded.ErrorOutline
+                                    TunnelStatus.DISCONNECTED -> Icons.Rounded.Lock
                                 },
-                                style = MaterialTheme.typography.titleLarge,
-                                color = Color(0xFFF8FAFC)
-                            )
-                            val subtitle = when {
-                                isError && !tunnelState.errorMessage.isNullOrBlank() -> tunnelState.errorMessage
-                                tunnelState.activeConfig != null -> {
-                                    val cfg = tunnelState.activeConfig
-                                    "${cfg.protocol.displayName} • ${cfg.host}:${cfg.port}"
-                                }
-                                else -> "SOCKS5 & HTTP Tunnel Ready"
-                            }
-                            Text(
-                                text = subtitle,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (isError) Color(0xFFFF8CA0) else Color(0xFF94A3B8),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(22.dp)
                             )
                         }
+                    }
+
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = when (tunnelState.status) {
+                                TunnelStatus.DISCONNECTED -> stringResource(R.string.status_disconnected)
+                                TunnelStatus.CONNECTING -> stringResource(R.string.status_connecting)
+                                TunnelStatus.CONNECTED -> stringResource(R.string.status_connected)
+                                TunnelStatus.ERROR -> stringResource(R.string.status_error)
+                            },
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color(0xFFF8FAFC)
+                        )
+                        val subtitle = when {
+                            isError && !tunnelState.errorMessage.isNullOrBlank() -> tunnelState.errorMessage
+                            tunnelState.activeConfig != null -> {
+                                val cfg = tunnelState.activeConfig
+                                "${cfg.displayTitle} • ${cfg.protocol.displayName} ${cfg.host}:${cfg.port}"
+                            }
+                            else -> "RC PROXY • SOCKS5 & HTTP Tunnel"
+                        }
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isError) Color(0xFFFF8CA0) else Color(0xFF94A3B8),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
 

@@ -1,5 +1,5 @@
 {
-  "name": "NetRelay",
+  "name": "RC Proxy",
   "description": "SOCKS5 and HTTP proxy VPN client with server, port, username, and password authentication.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

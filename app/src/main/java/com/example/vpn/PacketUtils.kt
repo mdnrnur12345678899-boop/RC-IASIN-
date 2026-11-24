@@ -49,9 +49,10 @@ object PacketUtils {
         payload: ByteArray = ByteArray(0),
         payloadLength: Int = payload.size,
         windowSize: Int = 65535,
+        mss: Int? = null,
     ): ByteArray {
         val ipHeaderLen = 20
-        val tcpHeaderLen = 20
+        val tcpHeaderLen = if (mss != null) 24 else 20
         val totalLen = ipHeaderLen + tcpHeaderLen + payloadLength
         val pkt = ByteArray(totalLen)
 
@@ -72,9 +73,15 @@ object PacketUtils {
         writeU16(pkt, 22, dstPort)
         writeU32(pkt, 24, seqNum and 0xFFFFFFFFL)
         writeU32(pkt, 28, ackNum and 0xFFFFFFFFL)
-        pkt[32] = 0x50.toByte() // 20-byte TCP header
+        pkt[32] = if (mss != null) 0x60.toByte() else 0x50.toByte()
         pkt[33] = (flags and 0xFF).toByte()
         writeU16(pkt, 34, windowSize)
+
+        if (mss != null) {
+            pkt[40] = 0x02 // Kind: MSS
+            pkt[41] = 0x04 // Length: 4
+            writeU16(pkt, 42, mss)
+        }
 
         if (payloadLength > 0) {
             System.arraycopy(payload, 0, pkt, ipHeaderLen + tcpHeaderLen, payloadLength)
@@ -162,7 +169,6 @@ object PacketUtils {
         transportLen: Int,
     ): Int {
         var sum = 0L
-        // IPv4 Pseudo-header
         sum += (srcIp ushr 16) and 0xFFFF
         sum += srcIp and 0xFFFF
         sum += (dstIp ushr 16) and 0xFFFF

@@ -15,6 +15,7 @@ import com.example.MainActivity
 import com.example.R
 import com.example.data.ProxyConfig
 import com.example.data.ProxyProtocol
+import com.example.network.ProxyHandshake
 import com.example.network.ProxyTester
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +37,7 @@ class ProxyVpnService : VpnService() {
         const val EXTRA_PASSWORD = "extra_password"
         const val EXTRA_LABEL = "extra_label"
 
-        private const val CHANNEL_ID = "netrelay_proxy_tunnel"
+        private const val CHANNEL_ID = "rcproxy_tunnel"
         private const val NOTIFICATION_ID = 1001
 
         fun startConnect(context: Context, config: ProxyConfig) {
@@ -105,10 +106,21 @@ class ProxyVpnService : VpnService() {
         TunnelStateHolder.setConnecting(config)
 
         connectJob = serviceScope.launch {
-            // 1. Verify the proxy server & credentials are genuinely reachable before capturing device traffic
-            val verifyResult = ProxyTester.verifyProxy(config)
-            if (verifyResult.isFailure) {
-                val msg = verifyResult.exceptionOrNull()?.message
+            // 1. Verify proxy handshake & authentication directly without depending on third-party ipify uptime
+            val handshakeCheck = runCatching {
+                val testStart = System.currentTimeMillis()
+                ProxyHandshake.connectViaProxy(
+                    config = config,
+                    targetHost = "1.1.1.1",
+                    targetPort = 443,
+                    connectTimeoutMs = 7000,
+                    readTimeoutMs = 5000
+                ).use { }
+                System.currentTimeMillis() - testStart
+            }
+
+            if (handshakeCheck.isFailure) {
+                val msg = handshakeCheck.exceptionOrNull()?.message
                     ?: "Could not authenticate or reach ${config.host}:${config.port}"
                 TunnelStateHolder.setError(msg, config)
                 stopForegroundCompat()
@@ -116,16 +128,20 @@ class ProxyVpnService : VpnService() {
                 return@launch
             }
 
-            val testInfo = verifyResult.getOrNull()
+            val handshakeMs = handshakeCheck.getOrNull()
 
             // 2. Establish Android VpnService TUN interface
             val builder = Builder()
-                .setSession(config.displayTitle)
+                .setSession("RC PROXY - ${config.displayTitle}")
                 .setMtu(1500)
                 .addAddress("10.8.0.2", 32)
                 .addRoute("0.0.0.0", 0)
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setMetered(false)
+            }
 
             runCatching {
                 builder.addDisallowedApplication(packageName)
@@ -158,9 +174,20 @@ class ProxyVpnService : VpnService() {
             startForegroundWithNotification(config, isConnecting = false)
             TunnelStateHolder.setConnected(
                 config = config,
-                exitIp = testInfo?.exitIp,
-                latencyMs = testInfo?.latencyMs
+                exitIp = null,
+                latencyMs = handshakeMs
             )
+
+            // 3. Populate real Exit IP asynchronously without blocking VPN startup
+            serviceScope.launch {
+                ProxyTester.verifyProxy(config).onSuccess { result ->
+                    TunnelStateHolder.updateExitInfo(result.exitIp, result.latencyMs)
+                    TunnelStateHolder.log(
+                        LogLevel.SUCCESS,
+                        "Exit IP verified: ${result.exitIp} (${result.latencyMs}ms)"
+                    )
+                }
+            }
         }
     }
 

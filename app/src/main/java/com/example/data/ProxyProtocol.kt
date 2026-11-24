@@ -19,7 +19,7 @@ data class ProxyConfig(
     val label: String = "",
 ) {
     val displayTitle: String
-        get() = label.trim().ifEmpty { "$host:$port" }
+        get() = label.trim().ifEmpty { "RC PROXY" }
 
     val hasCredentials: Boolean
         get() = username.isNotEmpty() || password.isNotEmpty()

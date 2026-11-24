@@ -8,18 +8,24 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.io.OutputStream
 import java.net.Socket
+import java.nio.charset.StandardCharsets
+import java.util.TreeMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import kotlin.random.Random
 
 class TunPacketEngine(
@@ -38,7 +44,7 @@ class TunPacketEngine(
     private enum class TcpState {
         CONNECTING,
         ESTABLISHED,
-        CLOSING,
+        FIN_WAIT,
         CLOSED
     }
 
@@ -49,14 +55,22 @@ class TunPacketEngine(
     ) {
         @Volatile var state: TcpState = TcpState.CONNECTING
         @Volatile var socket: Socket? = null
-        @Volatile var output: OutputStream? = null
         @Volatile var lastActivityMs: Long = System.currentTimeMillis()
-        val writeLock = Any()
+        @Volatile var clientFinReceived: Boolean = false
+        val writeChannel = Channel<ByteArray>(512)
+        val outOfOrder = TreeMap<Long, ByteArray>()
+        val seqLock = Any()
     }
+
+    private data class CachedDns(
+        val responseWithoutTxId: ByteArray,
+        val expiresAtMs: Long,
+    )
 
     private val running = AtomicBoolean(true)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessions = ConcurrentHashMap<SessionKey, TcpSession>()
+    private val dnsCache = ConcurrentHashMap<String, CachedDns>()
     private val writeLock = Any()
 
     private val tunInput = FileInputStream(tunFd.fileDescriptor)
@@ -106,6 +120,10 @@ class TunPacketEngine(
                     }
                 }
 
+                if (dnsCache.size > 256) {
+                    dnsCache.entries.removeIf { it.value.expiresAtMs < now }
+                }
+
                 TunnelStateHolder.updateTraffic(
                     bytesDownloaded = currIn,
                     bytesUploaded = currOut,
@@ -123,6 +141,7 @@ class TunPacketEngine(
             closeSession(key, session, sendRst = false)
         }
         sessions.clear()
+        dnsCache.clear()
         runCatching { scope.cancel() }
         runCatching { tunInput.close() }
         runCatching { tunOutput.close() }
@@ -166,7 +185,11 @@ class TunPacketEngine(
         val isRst = (flags and PacketUtils.TCP_RST) != 0
 
         if (isSyn && !isAck) {
-            sessions.remove(key)?.let { old -> runCatching { old.socket?.close() } }
+            sessions.remove(key)?.let { old ->
+                old.state = TcpState.CLOSED
+                old.writeChannel.close()
+                runCatching { old.socket?.close() }
+            }
 
             val session = TcpSession(
                 key = key,
@@ -186,66 +209,73 @@ class TunPacketEngine(
             return
         }
 
-        if (payloadLen > 0 && session.state == TcpState.ESTABLISHED) {
-            val diff = seqDiff(seqNum, session.clientNextSeq)
-            if (diff == 0L) {
-                val payload = pkt.copyOfRange(payloadOffset, payloadOffset + payloadLen)
-                session.clientNextSeq = (session.clientNextSeq + payloadLen) and 0xFFFFFFFFL
-                val ackPkt = PacketUtils.buildTcpPacket(
-                    srcIp = dstIp,
-                    srcPort = dstPort,
-                    dstIp = srcIp,
-                    dstPort = srcPort,
-                    seqNum = session.serverSeq,
-                    ackNum = session.clientNextSeq,
-                    flags = PacketUtils.TCP_ACK
-                )
-                writeToTun(ackPkt)
+        if (session.state == TcpState.CLOSED) return
 
-                scope.launch {
-                    try {
-                        synchronized(session.writeLock) {
-                            session.output?.write(payload)
-                            session.output?.flush()
+        synchronized(session.seqLock) {
+            if (payloadLen > 0) {
+                val payload = pkt.copyOfRange(payloadOffset, payloadOffset + payloadLen)
+                val diff = seqDiff(seqNum, session.clientNextSeq)
+
+                when {
+                    diff == 0L -> {
+                        session.writeChannel.trySend(payload)
+                        session.clientNextSeq = (session.clientNextSeq + payloadLen) and 0xFFFFFFFFL
+                        drainOutOfOrder(session)
+                        sendAck(session)
+                    }
+                    diff < 0L -> {
+                        val overlap = (-diff).toInt()
+                        if (overlap < payload.size) {
+                            val tail = payload.copyOfRange(overlap, payload.size)
+                            session.writeChannel.trySend(tail)
+                            session.clientNextSeq = (session.clientNextSeq + tail.size) and 0xFFFFFFFFL
+                            drainOutOfOrder(session)
                         }
-                        bytesOut.addAndGet(payloadLen.toLong())
-                    } catch (_: Exception) {
-                        closeSession(key, session, sendRst = true)
+                        sendAck(session)
+                    }
+                    diff in 1L..65536L -> {
+                        if (session.outOfOrder.size < 32) {
+                            session.outOfOrder[seqNum] = payload
+                        }
+                        sendAck(session)
                     }
                 }
-            } else if (diff < 0L) {
-                // Retransmission: re-ACK expected seq
-                val ackPkt = PacketUtils.buildTcpPacket(
-                    srcIp = dstIp,
-                    srcPort = dstPort,
-                    dstIp = srcIp,
-                    dstPort = srcPort,
-                    seqNum = session.serverSeq,
-                    ackNum = session.clientNextSeq,
-                    flags = PacketUtils.TCP_ACK
-                )
-                writeToTun(ackPkt)
             }
-        }
 
-        if (isFin) {
-            session.clientNextSeq = (session.clientNextSeq + 1L) and 0xFFFFFFFFL
-            if (session.state != TcpState.CLOSED) {
-                session.state = TcpState.CLOSING
-                val finAck = PacketUtils.buildTcpPacket(
-                    srcIp = dstIp,
-                    srcPort = dstPort,
-                    dstIp = srcIp,
-                    dstPort = srcPort,
-                    seqNum = session.serverSeq,
-                    ackNum = session.clientNextSeq,
-                    flags = PacketUtils.TCP_FIN or PacketUtils.TCP_ACK
-                )
-                session.serverSeq = (session.serverSeq + 1L) and 0xFFFFFFFFL
-                writeToTun(finAck)
-                closeSession(key, session, sendRst = false)
+            if (isFin && !session.clientFinReceived) {
+                val finSeq = (seqNum + payloadLen.toLong()) and 0xFFFFFFFFL
+                if (seqDiff(finSeq, session.clientNextSeq) <= 0L) {
+                    session.clientFinReceived = true
+                    session.clientNextSeq = (session.clientNextSeq + 1L) and 0xFFFFFFFFL
+                    if (session.state == TcpState.ESTABLISHED) {
+                        session.state = TcpState.FIN_WAIT
+                    }
+                    session.writeChannel.close()
+                    sendAck(session)
+                }
             }
         }
+    }
+
+    private fun drainOutOfOrder(session: TcpSession) {
+        while (true) {
+            val next = session.outOfOrder.remove(session.clientNextSeq) ?: break
+            session.writeChannel.trySend(next)
+            session.clientNextSeq = (session.clientNextSeq + next.size) and 0xFFFFFFFFL
+        }
+    }
+
+    private fun sendAck(session: TcpSession) {
+        val ackPkt = PacketUtils.buildTcpPacket(
+            srcIp = session.key.dstIp,
+            srcPort = session.key.dstPort,
+            dstIp = session.key.srcIp,
+            dstPort = session.key.srcPort,
+            seqNum = session.serverSeq,
+            ackNum = session.clientNextSeq,
+            flags = PacketUtils.TCP_ACK
+        )
+        writeToTun(ackPkt)
     }
 
     private fun launchTcpTunnel(session: TcpSession) {
@@ -262,19 +292,25 @@ class TunPacketEngine(
                     readTimeoutMs = 0,
                     protectSocket = protectSocket
                 )
+                runCatching { socket.keepAlive = true }
+
                 if (!running.get() || session.state == TcpState.CLOSED) {
                     runCatching { socket.close() }
                     return@launch
                 }
 
                 session.socket = socket
-                session.output = socket.getOutputStream()
-                session.state = TcpState.ESTABLISHED
+                if (session.state == TcpState.CONNECTING) {
+                    session.state = TcpState.ESTABLISHED
+                }
                 session.lastActivityMs = System.currentTimeMillis()
 
-                TunnelStateHolder.log(LogLevel.INFO, "TCP -> $dstHost:$dstPort via ${config.protocol.displayName}")
+                TunnelStateHolder.log(
+                    LogLevel.INFO,
+                    "TCP -> $dstHost:$dstPort via ${config.protocol.displayName}"
+                )
 
-                // Send SYN-ACK to TUN
+                // Send SYN-ACK with MSS=1400 to prevent MTU fragmentation
                 val synAck = PacketUtils.buildTcpPacket(
                     srcIp = session.key.dstIp,
                     srcPort = session.key.dstPort,
@@ -282,14 +318,32 @@ class TunPacketEngine(
                     dstPort = session.key.srcPort,
                     seqNum = session.serverSeq,
                     ackNum = session.clientNextSeq,
-                    flags = PacketUtils.TCP_SYN or PacketUtils.TCP_ACK
+                    flags = PacketUtils.TCP_SYN or PacketUtils.TCP_ACK,
+                    mss = 1400
                 )
                 session.serverSeq = (session.serverSeq + 1L) and 0xFFFFFFFFL
                 writeToTun(synAck)
 
+                // Dedicated sequential FIFO writer coroutine for this TCP socket
+                val writerJob = launch {
+                    val out = socket.getOutputStream()
+                    try {
+                        for (chunk in session.writeChannel) {
+                            out.write(chunk)
+                            out.flush()
+                            bytesOut.addAndGet(chunk.size.toLong())
+                            session.lastActivityMs = System.currentTimeMillis()
+                        }
+                        // Client closed write side cleanly (FIN)
+                        runCatching { socket.shutdownOutput() }
+                    } catch (_: Exception) {
+                        closeSession(session.key, session, sendRst = true)
+                    }
+                }
+
                 val input = socket.getInputStream()
                 val readBuf = ByteArray(1400)
-                while (running.get() && session.state == TcpState.ESTABLISHED) {
+                while (running.get() && session.state != TcpState.CLOSED) {
                     val n = input.read(readBuf)
                     if (n <= 0) break
                     session.lastActivityMs = System.currentTimeMillis()
@@ -310,8 +364,8 @@ class TunPacketEngine(
                     writeToTun(dataPkt)
                 }
 
-                if (session.state == TcpState.ESTABLISHED) {
-                    session.state = TcpState.CLOSING
+                writerJob.cancel()
+                if (session.state != TcpState.CLOSED) {
                     val finPkt = PacketUtils.buildTcpPacket(
                         srcIp = session.key.dstIp,
                         srcPort = session.key.dstPort,
@@ -343,60 +397,180 @@ class TunPacketEngine(
         val udpLen = PacketUtils.readU16(pkt, ihl + 4)
         if (udpLen < 8 || totalLen < ihl + udpLen) return
 
-        // Tunnel DNS queries (UDP port 53) as DNS-over-TCP through the configured proxy
         if (dstPort == 53) {
             val dnsQuery = pkt.copyOfRange(ihl + 8, ihl + udpLen)
+            if (dnsQuery.size < 12) return
+            val txId0 = dnsQuery[0]
+            val txId1 = dnsQuery[1]
+            val cacheKey = dnsQuery.copyOfRange(2, dnsQuery.size).joinToString(",") { "%02x".format(it) }
+            val now = System.currentTimeMillis()
+            val cached = dnsCache[cacheKey]
+            if (cached != null && cached.expiresAtMs > now) {
+                val resp = ByteArray(2 + cached.responseWithoutTxId.size).apply {
+                    this[0] = txId0
+                    this[1] = txId1
+                    System.arraycopy(cached.responseWithoutTxId, 0, this, 2, cached.responseWithoutTxId.size)
+                }
+                writeDnsUdpReply(dstIp, srcIp, srcPort, resp)
+                return
+            }
+
             val dnsServerIp = PacketUtils.ipIntToString(dstIp)
             scope.launch {
                 try {
-                    val socket = ProxyHandshake.connectViaProxy(
-                        config = config,
-                        targetHost = dnsServerIp,
-                        targetPort = 53,
-                        connectTimeoutMs = 5000,
-                        readTimeoutMs = 5000,
-                        protectSocket = protectSocket
-                    )
-                    socket.use { s ->
-                        val out = s.getOutputStream()
-                        val framedQuery = ByteArray(2 + dnsQuery.size)
-                        PacketUtils.writeU16(framedQuery, 0, dnsQuery.size)
-                        System.arraycopy(dnsQuery, 0, framedQuery, 2, dnsQuery.size)
-                        out.write(framedQuery)
-                        out.flush()
-                        bytesOut.addAndGet(dnsQuery.size.toLong())
-
-                        val input = s.getInputStream()
-                        val lenHeader = readExactBytes(input, 2)
-                        val respLen = PacketUtils.readU16(lenHeader, 0)
-                        if (respLen in 1..4096) {
-                            val dnsResp = readExactBytes(input, respLen)
-                            bytesIn.addAndGet(respLen.toLong())
-                            val udpResp = PacketUtils.buildUdpPacket(
-                                srcIp = dstIp,
-                                srcPort = 53,
-                                dstIp = srcIp,
-                                dstPort = srcPort,
-                                payload = dnsResp
-                            )
-                            writeToTun(udpResp)
-                        }
+                    bytesOut.addAndGet(dnsQuery.size.toLong())
+                    val dnsResp = resolveDnsThroughProxy(dnsQuery, dnsServerIp)
+                    if (dnsResp != null && dnsResp.size >= 12) {
+                        bytesIn.addAndGet(dnsResp.size.toLong())
+                        dnsCache[cacheKey] = CachedDns(
+                            responseWithoutTxId = dnsResp.copyOfRange(2, dnsResp.size),
+                            expiresAtMs = System.currentTimeMillis() + 60_000L
+                        )
+                        writeDnsUdpReply(dstIp, srcIp, srcPort, dnsResp)
                     }
                 } catch (e: ProxyException.AuthFailed) {
                     if (authFailureReported.compareAndSet(false, true)) {
                         onFatalAuthFailure(e.message ?: "Proxy authentication failed.")
                     }
                 } catch (_: Exception) {
-                    // Ignore transient DNS lookup failures
+                    // Ignore transient DNS failure
                 }
             }
         }
+    }
+
+    private fun writeDnsUdpReply(srcIp: Int, dstIp: Int, dstPort: Int, dnsResp: ByteArray) {
+        val udpResp = PacketUtils.buildUdpPacket(
+            srcIp = srcIp,
+            srcPort = 53,
+            dstIp = dstIp,
+            dstPort = dstPort,
+            payload = dnsResp
+        )
+        writeToTun(udpResp)
+    }
+
+    private fun resolveDnsThroughProxy(dnsQuery: ByteArray, fallbackDnsIp: String): ByteArray? {
+        // 1. Primary: DNS-over-HTTPS via 1.1.1.1:443 (works on BOTH HTTP CONNECT and SOCKS5 proxies)
+        queryDoH("1.1.1.1", "1.1.1.1", dnsQuery)?.let { return it }
+        // 2. Secondary: DNS-over-HTTPS via dns.google:443
+        queryDoH("dns.google", "dns.google", dnsQuery)?.let { return it }
+        // 3. Fallback: DNS-over-TCP via port 53
+        return queryDnsOverTcp(fallbackDnsIp, dnsQuery)
+    }
+
+    private fun queryDoH(host: String, sniHost: String, dnsQuery: ByteArray): ByteArray? {
+        return runCatching {
+            val rawSocket = ProxyHandshake.connectViaProxy(
+                config = config,
+                targetHost = host,
+                targetPort = 443,
+                connectTimeoutMs = 5000,
+                readTimeoutMs = 5000,
+                protectSocket = protectSocket
+            )
+            val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
+            val ssl = sslFactory.createSocket(rawSocket, sniHost, 443, true) as SSLSocket
+            ssl.use { tls ->
+                tls.soTimeout = 5000
+                tls.startHandshake()
+                val verified = HttpsURLConnection.getDefaultHostnameVerifier().verify(sniHost, tls.session)
+                if (!verified) return@runCatching null
+
+                val headers = ("POST /dns-query HTTP/1.1\r\n" +
+                    "Host: $host\r\n" +
+                    "Content-Type: application/dns-message\r\n" +
+                    "Accept: application/dns-message\r\n" +
+                    "Content-Length: ${dnsQuery.size}\r\n" +
+                    "Connection: close\r\n\r\n").toByteArray(StandardCharsets.US_ASCII)
+
+                val out = tls.getOutputStream()
+                out.write(headers)
+                out.write(dnsQuery)
+                out.flush()
+
+                val allBytes = tls.getInputStream().readBytes()
+                val sepIndex = findHeaderEnd(allBytes) ?: return@runCatching null
+                val headerText = String(allBytes, 0, sepIndex, StandardCharsets.ISO_8859_1)
+                if (!headerText.lineSequence().firstOrNull().orEmpty().contains(" 200")) {
+                    return@runCatching null
+                }
+                val body = allBytes.copyOfRange(sepIndex + 4, allBytes.size)
+                if (headerText.contains("Transfer-Encoding: chunked", ignoreCase = true)) {
+                    decodeChunkedBody(body)
+                } else {
+                    body
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun queryDnsOverTcp(dnsServerIp: String, dnsQuery: ByteArray): ByteArray? {
+        return runCatching {
+            val socket = ProxyHandshake.connectViaProxy(
+                config = config,
+                targetHost = dnsServerIp,
+                targetPort = 53,
+                connectTimeoutMs = 5000,
+                readTimeoutMs = 5000,
+                protectSocket = protectSocket
+            )
+            socket.use { s ->
+                val out = s.getOutputStream()
+                val framedQuery = ByteArray(2 + dnsQuery.size)
+                PacketUtils.writeU16(framedQuery, 0, dnsQuery.size)
+                System.arraycopy(dnsQuery, 0, framedQuery, 2, dnsQuery.size)
+                out.write(framedQuery)
+                out.flush()
+
+                val input = s.getInputStream()
+                val lenHeader = readExactBytes(input, 2)
+                val respLen = PacketUtils.readU16(lenHeader, 0)
+                if (respLen in 12..4096) readExactBytes(input, respLen) else null
+            }
+        }.getOrNull()
+    }
+
+    private fun findHeaderEnd(data: ByteArray): Int? {
+        for (i in 0 until data.size - 3) {
+            if (data[i] == '\r'.code.toByte() &&
+                data[i + 1] == '\n'.code.toByte() &&
+                data[i + 2] == '\r'.code.toByte() &&
+                data[i + 3] == '\n'.code.toByte()
+            ) {
+                return i
+            }
+        }
+        return null
+    }
+
+    private fun decodeChunkedBody(raw: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        var pos = 0
+        while (pos < raw.size) {
+            var lineEnd = pos
+            while (lineEnd < raw.size - 1 &&
+                !(raw[lineEnd] == '\r'.code.toByte() && raw[lineEnd + 1] == '\n'.code.toByte())
+            ) {
+                lineEnd++
+            }
+            if (lineEnd >= raw.size - 1) break
+            val sizeLine = String(raw, pos, lineEnd - pos, StandardCharsets.US_ASCII)
+                .substringBefore(';').trim()
+            val chunkSize = sizeLine.toIntOrNull(16) ?: break
+            pos = lineEnd + 2
+            if (chunkSize == 0 || pos + chunkSize > raw.size) break
+            out.write(raw, pos, chunkSize)
+            pos += chunkSize + 2
+        }
+        return out.toByteArray()
     }
 
     private fun closeSession(key: SessionKey, session: TcpSession, sendRst: Boolean) {
         sessions.remove(key, session)
         val prevState = session.state
         session.state = TcpState.CLOSED
+        session.writeChannel.close()
         if (sendRst && prevState != TcpState.CLOSED) {
             val rstPkt = PacketUtils.buildTcpPacket(
                 srcIp = key.dstIp,

@@ -118,7 +118,7 @@ fun TunnelScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Proxy Configuration",
+                        text = "RC PROXY Profile",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )

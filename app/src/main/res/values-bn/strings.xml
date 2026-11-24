@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">NetRelay</string>
+    <string name="app_name">RC Proxy</string>
     <string name="tab_tunnel">টানেল</string>
     <string name="tab_profiles">প্রোফাইল</string>
     <string name="tab_logs">লগ</string>

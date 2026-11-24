@@ -132,15 +132,18 @@ class ExampleUnitTest {
             seqNum = 1000L,
             ackNum = 2000L,
             flags = PacketUtils.TCP_SYN or PacketUtils.TCP_ACK,
-            payload = "hi".toByteArray()
+            payload = "hi".toByteArray(),
+            mss = 1400
         )
-        assertEquals(42, pkt.size)
+        assertEquals(46, pkt.size)
         assertEquals(0x45, pkt[0].toInt() and 0xFF)
         assertEquals(PacketUtils.PROTO_TCP, pkt[9].toInt() and 0xFF)
         assertEquals(51234, PacketUtils.readU16(pkt, 20))
         assertEquals(443, PacketUtils.readU16(pkt, 22))
         assertEquals(1000L, PacketUtils.readU32(pkt, 24))
         assertEquals(2000L, PacketUtils.readU32(pkt, 28))
-        assertArrayEquals("hi".toByteArray(), pkt.copyOfRange(40, 42))
+        assertEquals(0x60, pkt[32].toInt() and 0xFF)
+        assertEquals(1400, PacketUtils.readU16(pkt, 42))
+        assertArrayEquals("hi".toByteArray(), pkt.copyOfRange(44, 46))
     }
 }
