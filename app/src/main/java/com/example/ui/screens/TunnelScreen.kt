@@ -28,9 +28,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Label
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.BookmarkAdd
+import androidx.compose.material.icons.outlined.BubbleChart
+import androidx.compose.material.icons.outlined.CheckCircleOutline
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.DoNotDisturbOn
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Speed
@@ -39,6 +43,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -50,6 +55,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -60,12 +66,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.AppRoutingConfig
+import com.example.data.AppRoutingMode
 import com.example.data.ProxyProtocol
 import com.example.ui.ProxyFormState
 import com.example.ui.ProxyTestUiState
@@ -78,6 +88,8 @@ fun TunnelScreen(
     formState: ProxyFormState,
     tunnelState: TunnelRuntimeState,
     testState: ProxyTestUiState,
+    routingConfig: AppRoutingConfig,
+    isBubbleRunning: Boolean,
     onProtocolChange: (ProxyProtocol) -> Unit,
     onLabelChange: (String) -> Unit,
     onHostChange: (String) -> Unit,
@@ -90,6 +102,9 @@ fun TunnelScreen(
     onNewProfile: () -> Unit,
     onConnectClick: () -> Unit,
     onDisconnectClick: () -> Unit,
+    onOpenAllowedApps: () -> Unit,
+    onOpenDisallowedApps: () -> Unit,
+    onToggleBubble: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isLocked = tunnelState.status == TunnelStatus.CONNECTED ||
@@ -377,9 +392,263 @@ fun TunnelScreen(
             }
         }
 
+        AppRoutingCard(
+            routingConfig = routingConfig,
+            isLocked = isLocked,
+            onOpenAllowedApps = onOpenAllowedApps,
+            onOpenDisallowedApps = onOpenDisallowedApps
+        )
+
+        FloatingBubbleCard(
+            isBubbleRunning = isBubbleRunning,
+            onToggleBubble = onToggleBubble
+        )
+
         BackgroundKeepAliveBanner()
 
         Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun AppRoutingCard(
+    routingConfig: AppRoutingConfig,
+    isLocked: Boolean,
+    onOpenAllowedApps: () -> Unit,
+    onOpenDisallowedApps: () -> Unit,
+) {
+    val allowActive = routingConfig.mode == AppRoutingMode.ALLOW_SELECTED && routingConfig.allowedApps.isNotEmpty()
+    val disallowActive = routingConfig.mode == AppRoutingMode.DISALLOW_SELECTED && routingConfig.disallowedApps.isNotEmpty()
+
+    val summaryText = when {
+        allowActive -> stringResource(R.string.routing_allowed_summary, routingConfig.allowedApps.size)
+        disallowActive -> stringResource(R.string.routing_disallowed_summary, routingConfig.disallowedApps.size)
+        else -> stringResource(R.string.routing_all_apps_active)
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+        tonalElevation = 2.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Apps,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.routing_section_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = summaryText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                val isAllowModeSelected = routingConfig.mode == AppRoutingMode.ALLOW_SELECTED
+                if (isAllowModeSelected) {
+                    FilledTonalButton(
+                        onClick = onOpenAllowedApps,
+                        enabled = !isLocked,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("allowed_apps_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CheckCircleOutline,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (routingConfig.allowedApps.isNotEmpty()) {
+                                "${stringResource(R.string.routing_allowed_apps)} (${routingConfig.allowedApps.size})"
+                            } else {
+                                stringResource(R.string.routing_allowed_apps)
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onOpenAllowedApps,
+                        enabled = !isLocked,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("allowed_apps_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CheckCircleOutline,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (routingConfig.allowedApps.isNotEmpty()) {
+                                "${stringResource(R.string.routing_allowed_apps)} (${routingConfig.allowedApps.size})"
+                            } else {
+                                stringResource(R.string.routing_allowed_apps)
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                val isDisallowModeSelected = routingConfig.mode == AppRoutingMode.DISALLOW_SELECTED
+                if (isDisallowModeSelected) {
+                    FilledTonalButton(
+                        onClick = onOpenDisallowedApps,
+                        enabled = !isLocked,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("disallowed_apps_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.DoNotDisturbOn,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (routingConfig.disallowedApps.isNotEmpty()) {
+                                "${stringResource(R.string.routing_disallowed_apps)} (${routingConfig.disallowedApps.size})"
+                            } else {
+                                stringResource(R.string.routing_disallowed_apps)
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onOpenDisallowedApps,
+                        enabled = !isLocked,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("disallowed_apps_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.DoNotDisturbOn,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (routingConfig.disallowedApps.isNotEmpty()) {
+                                "${stringResource(R.string.routing_disallowed_apps)} (${routingConfig.disallowedApps.size})"
+                            } else {
+                                stringResource(R.string.routing_disallowed_apps)
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FloatingBubbleCard(
+    isBubbleRunning: Boolean,
+    onToggleBubble: (Boolean) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (isBubbleRunning) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            } else {
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+            }
+        ),
+        tonalElevation = 2.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.BubbleChart,
+                contentDescription = null,
+                tint = if (isBubbleRunning) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.secondary
+                }
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.bubble_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = if (isBubbleRunning) {
+                        stringResource(R.string.bubble_subtitle_on)
+                    } else {
+                        stringResource(R.string.bubble_subtitle_off)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = isBubbleRunning,
+                onCheckedChange = onToggleBubble,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("floating_bubble_switch")
+            )
+        }
     }
 }
 

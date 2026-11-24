@@ -27,4 +27,35 @@
     <string name="error_empty_host">সঠিক প্রক্সি সার্ভার IP বা হোস্টনেম লিখুন।</string>
     <string name="error_invalid_port">পোর্ট ১ থেকে ৬৫৫৩৫ এর মধ্যে হতে হবে।</string>
     <string name="error_vpn_denied">সিস্টেম VPN অনুমতি দেওয়া হয়নি।</string>
+
+    <string name="telegram_title">RC PROXY টেলিগ্রাম চ্যানেল</string>
+    <string name="telegram_message">আপডেট এবং সাপোর্টের জন্য আমাদের অফিশিয়াল টেলিগ্রাম চ্যানেলে জয়েন করুন:\nhttps://t.me/rciasin</string>
+    <string name="telegram_join">জয়েন করুন</string>
+    <string name="telegram_dont_show_again">আর দেখাবেন না</string>
+    <string name="telegram_later">পরে</string>
+
+    <string name="routing_section_title">অ্যাপ ফিল্টার (App Routing)</string>
+    <string name="routing_allowed_apps">Allowed Apps</string>
+    <string name="routing_disallowed_apps">Don\'t Allow Apps</string>
+    <string name="routing_all_apps_active">কোনো অ্যাপ সিলেক্ট না থাকায় ফোনের সব অ্যাপে প্রক্সি চলবে।</string>
+    <string name="routing_allowed_summary">শুধুমাত্র সিলেক্ট করা %1$d টি অ্যাপে প্রক্সি চলবে।</string>
+    <string name="routing_disallowed_summary">সিলেক্ট করা %1$d টি অ্যাপ বাদে বাকি সব অ্যাপে প্রক্সি চলবে।</string>
+    <string name="routing_search_hint">অ্যাপ সার্চ করুন…</string>
+    <string name="routing_show_system">সিস্টেম অ্যাপ দেখান</string>
+    <string name="routing_clear_all">সব মুছুন</string>
+    <string name="routing_done">সম্পন্ন</string>
+    <string name="routing_loading_apps">অ্যাপ তালিকা লোড হচ্ছে…</string>
+    <string name="routing_no_apps_found">কোনো অ্যাপ পাওয়া যায়নি।</string>
+
+    <string name="bubble_title">ফ্লোটিং বাবল (Floating Bubble)</string>
+    <string name="bubble_subtitle_on">বাবল চালু আছে। অ্যাপ মিনিমাইজ থেকে কেটে দিলেও বাবলে চাপ দিয়ে প্রক্সি ON/OFF করতে পারবেন।</string>
+    <string name="bubble_subtitle_off">বাবল অন করলে অ্যাপ কেটে দিলেও স্ক্রিনে থাকা বাবল দিয়ে প্রক্সি ON/OFF করা যাবে।</string>
+    <string name="bubble_notification_channel_name">RC PROXY ফ্লোটিং বাবল</string>
+    <string name="bubble_notification_title">RC PROXY বাবল চালু আছে</string>
+    <string name="bubble_notification_text">স্ক্রিনের বাবলে চাপ দিয়ে প্রক্সি ON/OFF করুন</string>
+    <string name="bubble_action_hide">বাবল বন্ধ করুন</string>
+    <string name="bubble_permission_needed">ফ্লোটিং বাবল চালু করতে RC Proxy-এর জন্য Display over other apps অনুমতি দিন।</string>
+
+    <string name="security_tamper_title">সিকিউরিটি সতর্কতা</string>
+    <string name="security_tamper_message">অ্যাপটি পরিবর্তন বা রিসাইন করা হয়েছে, তাই নিরাপত্তার জন্য এটি চালু করা যাবে না।</string>
 </resources>

@@ -8,12 +8,20 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.R
 import com.example.data.AppDatabase
+import com.example.data.AppPreferences
+import com.example.data.AppRoutingConfig
+import com.example.data.AppRoutingMode
+import com.example.data.InstalledAppInfo
+import com.example.data.InstalledAppsRepository
 import com.example.data.ProxyConfig
 import com.example.data.ProxyProfile
 import com.example.data.ProxyProtocol
 import com.example.data.ProxyRepository
 import com.example.network.ProxyTestResult
 import com.example.network.ProxyTester
+import com.example.security.AppIntegrityGuard
+import com.example.security.IntegrityResult
+import com.example.vpn.FloatingBubbleService
 import com.example.vpn.LogLevel
 import com.example.vpn.ProxyVpnService
 import com.example.vpn.TunnelLogEntry
@@ -70,6 +78,26 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
 
     val tunnelState: StateFlow<TunnelRuntimeState> = TunnelStateHolder.state
     val logs: StateFlow<List<TunnelLogEntry>> = TunnelStateHolder.logs
+    val isBubbleRunning: StateFlow<Boolean> = TunnelStateHolder.isBubbleRunning
+
+    val integrityResult: IntegrityResult = AppIntegrityGuard.verify(application)
+
+    private val _showTelegramDialog = MutableStateFlow(
+        integrityResult.isValid && !AppPreferences.isTelegramPromptDismissed(application)
+    )
+    val showTelegramDialog: StateFlow<Boolean> = _showTelegramDialog.asStateFlow()
+
+    private val _routingConfig = MutableStateFlow(AppPreferences.getRoutingConfig(application))
+    val routingConfig: StateFlow<AppRoutingConfig> = _routingConfig.asStateFlow()
+
+    private val _installedApps = MutableStateFlow<List<InstalledAppInfo>>(emptyList())
+    val installedApps: StateFlow<List<InstalledAppInfo>> = _installedApps.asStateFlow()
+
+    private val _isAppsLoading = MutableStateFlow(false)
+    val isAppsLoading: StateFlow<Boolean> = _isAppsLoading.asStateFlow()
+
+    private val _activeAppPickerMode = MutableStateFlow<AppRoutingMode?>(null)
+    val activeAppPickerMode: StateFlow<AppRoutingMode?> = _activeAppPickerMode.asStateFlow()
 
     private var pendingConfigForVpnConsent: ProxyConfig? = null
 
@@ -79,6 +107,14 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
             if (last != null) {
                 populateFromProfile(last)
             }
+        }
+        // Restore bubble overlay automatically on launch if user previously enabled it and permission holds
+        if (integrityResult.isValid &&
+            AppPreferences.isBubbleEnabled(application) &&
+            (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M ||
+                android.provider.Settings.canDrawOverlays(application))
+        ) {
+            runCatching { FloatingBubbleService.start(application) }
         }
     }
 
@@ -246,6 +282,90 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
         TunnelStateHolder.clearLogs()
     }
 
+    fun dismissTelegramPrompt(dontShowAgain: Boolean) {
+        if (dontShowAgain) {
+            AppPreferences.setTelegramPromptDismissed(getApplication(), true)
+        }
+        _showTelegramDialog.value = false
+    }
+
+    fun openAppPicker(mode: AppRoutingMode) {
+        val app = getApplication<Application>()
+        AppPreferences.saveRoutingMode(app, mode)
+        _routingConfig.update { it.copy(mode = mode) }
+        _activeAppPickerMode.value = mode
+
+        if (_installedApps.value.isEmpty() && !_isAppsLoading.value) {
+            _isAppsLoading.value = true
+            viewModelScope.launch {
+                val loaded = InstalledAppsRepository.loadInstalledApps(app)
+                _installedApps.value = loaded
+                _isAppsLoading.value = false
+            }
+        }
+    }
+
+    fun closeAppPicker() {
+        _activeAppPickerMode.value = null
+    }
+
+    fun toggleAppPackage(packageName: String) {
+        val app = getApplication<Application>()
+        val mode = _activeAppPickerMode.value ?: _routingConfig.value.mode
+        _routingConfig.update { current ->
+            when (mode) {
+                AppRoutingMode.ALLOW_SELECTED -> {
+                    val next = current.allowedApps.toMutableSet()
+                    if (!next.add(packageName)) next.remove(packageName)
+                    AppPreferences.saveAllowedApps(app, next)
+                    current.copy(mode = mode, allowedApps = next)
+                }
+                AppRoutingMode.DISALLOW_SELECTED -> {
+                    val next = current.disallowedApps.toMutableSet()
+                    if (!next.add(packageName)) next.remove(packageName)
+                    AppPreferences.saveDisallowedApps(app, next)
+                    current.copy(mode = mode, disallowedApps = next)
+                }
+            }
+        }
+    }
+
+    fun clearActiveAppSelection() {
+        val app = getApplication<Application>()
+        val mode = _activeAppPickerMode.value ?: _routingConfig.value.mode
+        _routingConfig.update { current ->
+            when (mode) {
+                AppRoutingMode.ALLOW_SELECTED -> {
+                    AppPreferences.saveAllowedApps(app, emptySet())
+                    current.copy(allowedApps = emptySet())
+                }
+                AppRoutingMode.DISALLOW_SELECTED -> {
+                    AppPreferences.saveDisallowedApps(app, emptySet())
+                    current.copy(disallowedApps = emptySet())
+                }
+            }
+        }
+    }
+
+    fun syncDraftConfigForBubble() {
+        val state = _formState.value
+        val trimmedHost = state.host.trim()
+        val parsedPort = state.portText.trim().toIntOrNull()
+        if (trimmedHost.isNotEmpty() && !trimmedHost.contains(' ') && parsedPort != null && parsedPort in 1..65535) {
+            AppPreferences.saveLastProxyConfig(
+                getApplication(),
+                ProxyConfig(
+                    protocol = state.protocol,
+                    host = trimmedHost,
+                    port = parsedPort,
+                    username = state.username,
+                    password = state.password,
+                    label = state.label.trim()
+                )
+            )
+        }
+    }
+
     private fun validateAndBuildConfig(): ProxyConfig? {
         val app = getApplication<Application>()
         val state = _formState.value
@@ -267,7 +387,7 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
             return null
         }
 
-        return ProxyConfig(
+        val cfg = ProxyConfig(
             protocol = state.protocol,
             host = trimmedHost,
             port = parsedPort!!,
@@ -275,5 +395,7 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
             password = state.password,
             label = state.label.trim()
         )
+        AppPreferences.saveLastProxyConfig(app, cfg)
+        return cfg
     }
 }

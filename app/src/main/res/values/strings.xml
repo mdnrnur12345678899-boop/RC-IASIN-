@@ -56,4 +56,35 @@
     <string name="cd_protocol_icon">Proxy protocol</string>
     <string name="cd_delete_profile">Delete saved profile</string>
     <string name="cd_load_profile">Load and connect profile</string>
+
+    <string name="telegram_title">Join RC PROXY Telegram</string>
+    <string name="telegram_message">Join our official Telegram channel for proxy updates, configs, and support:\nhttps://t.me/rciasin</string>
+    <string name="telegram_join">Join Channel</string>
+    <string name="telegram_dont_show_again">Don\'t show again</string>
+    <string name="telegram_later">Later</string>
+
+    <string name="routing_section_title">App Filter Routing</string>
+    <string name="routing_allowed_apps">Allowed Apps</string>
+    <string name="routing_disallowed_apps">Don\'t Allow Apps</string>
+    <string name="routing_all_apps_active">All device apps will use the proxy (none selected).</string>
+    <string name="routing_allowed_summary">Only %1$d selected app(s) will use the proxy.</string>
+    <string name="routing_disallowed_summary">All apps except %1$d selected app(s) will use the proxy.</string>
+    <string name="routing_search_hint">Search installed apps…</string>
+    <string name="routing_show_system">Show system apps</string>
+    <string name="routing_clear_all">Clear</string>
+    <string name="routing_done">Done</string>
+    <string name="routing_loading_apps">Loading installed apps…</string>
+    <string name="routing_no_apps_found">No matching apps found.</string>
+
+    <string name="bubble_title">Floating Bubble</string>
+    <string name="bubble_subtitle_on">Bubble is active on screen. Tap it anytime to turn Proxy ON/OFF even after closing the app.</string>
+    <string name="bubble_subtitle_off">Turn on floating bubble to toggle Proxy ON/OFF from anywhere even after closing the app.</string>
+    <string name="bubble_notification_channel_name">RC PROXY Floating Bubble</string>
+    <string name="bubble_notification_title">RC PROXY Bubble Active</string>
+    <string name="bubble_notification_text">Tap floating bubble on screen to toggle proxy ON/OFF</string>
+    <string name="bubble_action_hide">Hide Bubble</string>
+    <string name="bubble_permission_needed">Allow \"Display over other apps\" for RC Proxy to enable the floating bubble.</string>
+
+    <string name="security_tamper_title">Security Check Failed</string>
+    <string name="security_tamper_message">This build of RC Proxy has been modified or re-signed and cannot run.</string>
 </resources>

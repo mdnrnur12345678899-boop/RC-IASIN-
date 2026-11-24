@@ -52,6 +52,13 @@ object TunnelStateHolder {
     private val _logs = MutableStateFlow<List<TunnelLogEntry>>(emptyList())
     val logs: StateFlow<List<TunnelLogEntry>> = _logs.asStateFlow()
 
+    private val _isBubbleRunning = MutableStateFlow(false)
+    val isBubbleRunning: StateFlow<Boolean> = _isBubbleRunning.asStateFlow()
+
+    fun setBubbleRunning(running: Boolean) {
+        _isBubbleRunning.value = running
+    }
+
     private val nextLogId = AtomicLong(1L)
     private val threadLocalFormat = object : ThreadLocal<SimpleDateFormat>() {
         override fun initialValue(): SimpleDateFormat = SimpleDateFormat("HH:mm:ss", Locale.US)

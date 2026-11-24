@@ -13,10 +13,13 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.data.AppPreferences
+import com.example.data.AppRoutingMode
 import com.example.data.ProxyConfig
 import com.example.data.ProxyProtocol
 import com.example.network.ProxyHandshake
 import com.example.network.ProxyTester
+import com.example.security.AppIntegrityGuard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -114,6 +117,7 @@ class ProxyVpnService : VpnService() {
                     label = intent.getStringExtra(EXTRA_LABEL).orEmpty()
                 )
                 persistActiveConfig(config)
+                AppPreferences.saveLastProxyConfig(this, config)
                 startForegroundWithNotification(config, isConnecting = true)
                 establishTunnel(config)
             }
@@ -150,6 +154,18 @@ class ProxyVpnService : VpnService() {
         TunnelStateHolder.setConnecting(config)
 
         connectJob = serviceScope.launch {
+            val integrity = AppIntegrityGuard.verify(this@ProxyVpnService)
+            if (!integrity.isValid) {
+                clearPersistedConfig()
+                TunnelStateHolder.setError(
+                    integrity.reason ?: "App integrity verification failed.",
+                    config
+                )
+                stopForegroundCompat()
+                stopSelf()
+                return@launch
+            }
+
             val handshakeCheck = runCatching {
                 val testStart = System.currentTimeMillis()
                 ProxyHandshake.connectViaProxy(
@@ -195,9 +211,45 @@ class ProxyVpnService : VpnService() {
                 builder.setMetered(false)
             }
 
-            // Exclude only RC Proxy itself so proxy sockets don't loop back into TUN
-            runCatching {
-                builder.addDisallowedApplication(packageName)
+            val routingConfig = AppPreferences.getRoutingConfig(this@ProxyVpnService)
+            val activeSelection = routingConfig.activeSelectedApps
+                .asSequence()
+                .filter { it.isNotBlank() && it != packageName }
+                .toSet()
+
+            if (routingConfig.mode == AppRoutingMode.ALLOW_SELECTED && activeSelection.isNotEmpty()) {
+                var addedCount = 0
+                activeSelection.forEach { pkg ->
+                    if (runCatching { builder.addAllowedApplication(pkg) }.isSuccess) {
+                        addedCount++
+                    }
+                }
+                if (addedCount > 0) {
+                    TunnelStateHolder.log(
+                        LogLevel.INFO,
+                        "App Routing: Allowed mode ($addedCount selected apps)"
+                    )
+                } else {
+                    runCatching { builder.addDisallowedApplication(packageName) }
+                    TunnelStateHolder.log(LogLevel.INFO, "App Routing: All Apps")
+                }
+            } else {
+                // Always exclude RC Proxy itself so proxy sockets don't loop back into TUN
+                runCatching { builder.addDisallowedApplication(packageName) }
+                if (routingConfig.mode == AppRoutingMode.DISALLOW_SELECTED && activeSelection.isNotEmpty()) {
+                    var excludedCount = 0
+                    activeSelection.forEach { pkg ->
+                        if (runCatching { builder.addDisallowedApplication(pkg) }.isSuccess) {
+                            excludedCount++
+                        }
+                    }
+                    TunnelStateHolder.log(
+                        LogLevel.INFO,
+                        "App Routing: Don't Allow mode ($excludedCount excluded apps)"
+                    )
+                } else {
+                    TunnelStateHolder.log(LogLevel.INFO, "App Routing: All Apps")
+                }
             }
 
             val fd = builder.establish()

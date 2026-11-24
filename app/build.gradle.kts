@@ -1,4 +1,7 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.util.Locale
 
 plugins {
   alias(libs.plugins.android.application)
@@ -6,6 +9,32 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
+}
+
+fun readExpectedCertSha256(rootDir: File): String {
+  val digests = linkedSetOf<String>()
+  fun collectFromKeystore(file: File, storePass: String?, aliasFilter: String?) {
+    if (!file.exists() || storePass == null) return
+    runCatching {
+      val ks = KeyStore.getInstance(KeyStore.getDefaultType())
+      file.inputStream().use { ks.load(it, storePass.toCharArray()) }
+      val aliases = if (aliasFilter != null && ks.containsAlias(aliasFilter)) {
+        listOf(aliasFilter)
+      } else {
+        ks.aliases().toList()
+      }
+      val md = MessageDigest.getInstance("SHA-256")
+      for (alias in aliases) {
+        val cert = ks.getCertificate(alias) ?: continue
+        val hex = md.digest(cert.encoded).joinToString("") { "%02X".format(Locale.US, it) }
+        digests.add(hex)
+      }
+    }
+  }
+  collectFromKeystore(File(rootDir, "debug.keystore"), "android", "androiddebugkey")
+  val releasePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
+  collectFromKeystore(File(releasePath), System.getenv("STORE_PASSWORD"), "upload")
+  return digests.joinToString(",")
 }
 
 android {
@@ -20,6 +49,7 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    buildConfigField("String", "EXPECTED_CERT_SHA256", "\"${readExpectedCertSha256(rootDir)}\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -43,13 +73,18 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      isDebuggable = false
+      isMinifyEnabled = true
+      isShrinkResources = true
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")

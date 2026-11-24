@@ -1,21 +1,25 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Obfuscate and flatten non-manifest packages to harden DEX against inspection
+-repackageclasses 'r'
+-allowaccessmodification
+-overloadaggressively
+-renamesourcefileattribute P
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Preserve annotations required by Room and Jetpack Compose
+-keepattributes *Annotation*
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Room database & entities
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class * { *; }
+-keep @androidx.room.Dao interface * { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep AndroidManifest entry components by name while obfuscating internal helpers
+-keep public class com.example.RCProxyApplication
+-keep public class com.example.MainActivity
+-keep public class com.example.vpn.ProxyVpnService
+-keep public class com.example.vpn.FloatingBubbleService
+
+# Silence third-party optional annotation warnings in OkHttp/Okio
+-dontwarn javax.annotation.**
+-dontwarn org.codehaus.mojo.animal_sniffer.**
+-dontwarn okhttp3.**
+-dontwarn okio.**
