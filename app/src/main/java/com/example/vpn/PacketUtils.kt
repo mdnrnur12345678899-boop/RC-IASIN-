@@ -3,6 +3,7 @@ package com.example.vpn
 import java.util.concurrent.atomic.AtomicInteger
 
 object PacketUtils {
+    const val PROTO_ICMP = 1
     const val PROTO_TCP = 6
     const val PROTO_UDP = 17
 
@@ -66,7 +67,7 @@ object PacketUtils {
         pkt[9] = PROTO_TCP.toByte()
         writeU32(pkt, 12, srcIp.toLong() and 0xFFFFFFFFL)
         writeU32(pkt, 16, dstIp.toLong() and 0xFFFFFFFFL)
-        writeU16(pkt, 10, computeIpChecksum(pkt, 0, ipHeaderLen))
+        writeU16(pkt, 10, computeChecksum(pkt, 0, ipHeaderLen))
 
         // TCP Header
         writeU16(pkt, 20, srcPort)
@@ -113,7 +114,6 @@ object PacketUtils {
         val totalLen = ipHeaderLen + udpLen
         val pkt = ByteArray(totalLen)
 
-        // IPv4 Header
         pkt[0] = 0x45.toByte()
         pkt[1] = 0x00
         writeU16(pkt, 2, totalLen)
@@ -123,9 +123,8 @@ object PacketUtils {
         pkt[9] = PROTO_UDP.toByte()
         writeU32(pkt, 12, srcIp.toLong() and 0xFFFFFFFFL)
         writeU32(pkt, 16, dstIp.toLong() and 0xFFFFFFFFL)
-        writeU16(pkt, 10, computeIpChecksum(pkt, 0, ipHeaderLen))
+        writeU16(pkt, 10, computeChecksum(pkt, 0, ipHeaderLen))
 
-        // UDP Header
         writeU16(pkt, 20, srcPort)
         writeU16(pkt, 22, dstPort)
         writeU16(pkt, 24, udpLen)
@@ -147,12 +146,101 @@ object PacketUtils {
         return pkt
     }
 
-    private fun computeIpChecksum(buf: ByteArray, offset: Int, length: Int): Int {
+    /**
+     * Builds an ICMP Type 3 Code 3 (Port Unreachable) packet so apps attempting QUIC (UDP:443)
+     * immediately fall back to HTTPS over TCP instead of stalling.
+     */
+    fun buildIcmpPortUnreachable(originalPkt: ByteArray, ihl: Int, originalTotalLen: Int): ByteArray? {
+        val quotedLen = (ihl + 8).coerceAtMost(originalTotalLen)
+        if (quotedLen < 28) return null
+
+        val ipHeaderLen = 20
+        val icmpHeaderLen = 8
+        val totalLen = ipHeaderLen + icmpHeaderLen + quotedLen
+        val pkt = ByteArray(totalLen)
+
+        val origSrcIp = readU32(originalPkt, 12)
+        val origDstIp = readU32(originalPkt, 16)
+
+        pkt[0] = 0x45.toByte()
+        pkt[1] = 0x00
+        writeU16(pkt, 2, totalLen)
+        writeU16(pkt, 4, ipIdCounter.getAndIncrement() and 0xFFFF)
+        writeU16(pkt, 6, 0x4000)
+        pkt[8] = 64
+        pkt[9] = PROTO_ICMP.toByte()
+        writeU32(pkt, 12, origDstIp) // Reply comes from destination
+        writeU32(pkt, 16, origSrcIp)
+        writeU16(pkt, 10, computeChecksum(pkt, 0, ipHeaderLen))
+
+        pkt[20] = 3 // Destination Unreachable
+        pkt[21] = 3 // Port Unreachable
+        System.arraycopy(originalPkt, 0, pkt, ipHeaderLen + icmpHeaderLen, quotedLen)
+        writeU16(pkt, 22, computeChecksum(pkt, ipHeaderLen, icmpHeaderLen + quotedLen))
+        return pkt
+    }
+
+    /**
+     * Builds an IPv6 TCP RST+ACK reply for incoming IPv6 SYN segments so dual-stack apps
+     * fall back to IPv4 immediately without leaking or timing out.
+     */
+    fun buildIpv6TcpRst(ipv6Pkt: ByteArray, len: Int): ByteArray? {
+        if (len < 60) return null // 40-byte IPv6 header + 20-byte TCP header
+        val nextHeader = ipv6Pkt[6].toInt() and 0xFF
+        if (nextHeader != PROTO_TCP) return null
+
+        val tcpFlags = ipv6Pkt[53].toInt() and 0x3F
+        if ((tcpFlags and TCP_SYN) == 0 || (tcpFlags and TCP_ACK) != 0) return null
+
+        val srcPort = readU16(ipv6Pkt, 40)
+        val dstPort = readU16(ipv6Pkt, 42)
+        val seqNum = readU32(ipv6Pkt, 44)
+
+        val pkt = ByteArray(60)
+        pkt[0] = 0x60.toByte() // Version 6
+        writeU16(pkt, 4, 20) // Payload length = 20 bytes TCP
+        pkt[6] = PROTO_TCP.toByte()
+        pkt[7] = 64 // Hop limit
+        // Swap src (8..23) and dst (24..39)
+        System.arraycopy(ipv6Pkt, 24, pkt, 8, 16)
+        System.arraycopy(ipv6Pkt, 8, pkt, 24, 16)
+
+        // TCP header at offset 40
+        writeU16(pkt, 40, dstPort)
+        writeU16(pkt, 42, srcPort)
+        writeU32(pkt, 44, 0L)
+        writeU32(pkt, 48, (seqNum + 1L) and 0xFFFFFFFFL)
+        pkt[52] = 0x50.toByte()
+        pkt[53] = (TCP_RST or TCP_ACK).toByte()
+        writeU16(pkt, 54, 0)
+
+        // IPv6 TCP pseudo-header checksum
+        var sum = 0L
+        for (i in 8 until 40 step 2) {
+            sum += readU16(pkt, i)
+        }
+        sum += 20L // TCP length
+        sum += PROTO_TCP.toLong()
+        for (i in 40 until 60 step 2) {
+            sum += readU16(pkt, i)
+        }
+        while ((sum ushr 16) != 0L) {
+            sum = (sum and 0xFFFFL) + (sum ushr 16)
+        }
+        writeU16(pkt, 56, (sum.inv() and 0xFFFFL).toInt())
+        return pkt
+    }
+
+    private fun computeChecksum(buf: ByteArray, offset: Int, length: Int): Int {
         var sum = 0L
         var i = offset
-        while (i < offset + length) {
+        val end = offset + length
+        while (i + 1 < end) {
             sum += readU16(buf, i)
             i += 2
+        }
+        if (i < end) {
+            sum += (buf[i].toInt() and 0xFF) shl 8
         }
         while ((sum ushr 16) != 0L) {
             sum = (sum and 0xFFFFL) + (sum ushr 16)

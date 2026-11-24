@@ -37,6 +37,15 @@ class ProxyVpnService : VpnService() {
         const val EXTRA_PASSWORD = "extra_password"
         const val EXTRA_LABEL = "extra_label"
 
+        private const val PREFS_NAME = "rcproxy_service_prefs"
+        private const val KEY_ACTIVE = "is_active"
+        private const val KEY_PROTOCOL = "protocol"
+        private const val KEY_HOST = "host"
+        private const val KEY_PORT = "port"
+        private const val KEY_USERNAME = "username"
+        private const val KEY_PASSWORD = "password"
+        private const val KEY_LABEL = "label"
+
         private const val CHANNEL_ID = "rcproxy_tunnel"
         private const val NOTIFICATION_ID = 1001
 
@@ -73,6 +82,7 @@ class ProxyVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_DISCONNECT -> {
+                clearPersistedConfig()
                 stopVpnTunnel("Proxy disconnected by user.")
                 stopSelf()
                 return START_NOT_STICKY
@@ -81,6 +91,7 @@ class ProxyVpnService : VpnService() {
                 val host = intent.getStringExtra(EXTRA_HOST)?.trim().orEmpty()
                 val port = intent.getIntExtra(EXTRA_PORT, 0)
                 if (host.isEmpty() || port !in 1..65535) {
+                    clearPersistedConfig()
                     TunnelStateHolder.setError("Invalid proxy host or port.")
                     stopSelf()
                     return START_NOT_STICKY
@@ -93,11 +104,28 @@ class ProxyVpnService : VpnService() {
                     password = intent.getStringExtra(EXTRA_PASSWORD).orEmpty(),
                     label = intent.getStringExtra(EXTRA_LABEL).orEmpty()
                 )
+                persistActiveConfig(config)
                 startForegroundWithNotification(config, isConnecting = true)
                 establishTunnel(config)
             }
+            null -> {
+                // Restored by OS under START_STICKY while running in background
+                val restored = loadPersistedConfig()
+                if (restored != null) {
+                    startForegroundWithNotification(restored, isConnecting = true)
+                    establishTunnel(restored)
+                } else {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+            }
         }
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Keep VPN proxy running in background even if user removes app from Recents
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun establishTunnel(config: ProxyConfig) {
@@ -106,7 +134,6 @@ class ProxyVpnService : VpnService() {
         TunnelStateHolder.setConnecting(config)
 
         connectJob = serviceScope.launch {
-            // 1. Verify proxy handshake & authentication directly without depending on third-party ipify uptime
             val handshakeCheck = runCatching {
                 val testStart = System.currentTimeMillis()
                 ProxyHandshake.connectViaProxy(
@@ -120,6 +147,7 @@ class ProxyVpnService : VpnService() {
             }
 
             if (handshakeCheck.isFailure) {
+                clearPersistedConfig()
                 val msg = handshakeCheck.exceptionOrNull()?.message
                     ?: "Could not authenticate or reach ${config.host}:${config.port}"
                 TunnelStateHolder.setError(msg, config)
@@ -130,7 +158,6 @@ class ProxyVpnService : VpnService() {
 
             val handshakeMs = handshakeCheck.getOrNull()
 
-            // 2. Establish Android VpnService TUN interface
             val builder = Builder()
                 .setSession("RC PROXY - ${config.displayTitle}")
                 .setMtu(1500)
@@ -139,16 +166,27 @@ class ProxyVpnService : VpnService() {
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
 
+            // Capture IPv6 so dual-stack cellular networks don't bypass the proxy
+            runCatching {
+                builder.addAddress("fd00:10:8::2", 128)
+                builder.addRoute("::", 0)
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                runCatching { builder.setUnderlyingNetworks(null) }
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setMetered(false)
             }
 
+            // Exclude only RC Proxy itself so proxy sockets don't loop back into TUN
             runCatching {
                 builder.addDisallowedApplication(packageName)
             }
 
             val fd = builder.establish()
             if (fd == null) {
+                clearPersistedConfig()
                 TunnelStateHolder.setError("Failed to establish Android VPN TUN interface.", config)
                 stopForegroundCompat()
                 stopSelf()
@@ -162,6 +200,7 @@ class ProxyVpnService : VpnService() {
                 protectSocket = { socket -> protect(socket) },
                 onFatalAuthFailure = { errorMsg ->
                     serviceScope.launch {
+                        clearPersistedConfig()
                         stopVpnTunnel(null)
                         TunnelStateHolder.setError(errorMsg, config)
                         stopSelf()
@@ -178,7 +217,6 @@ class ProxyVpnService : VpnService() {
                 latencyMs = handshakeMs
             )
 
-            // 3. Populate real Exit IP asynchronously without blocking VPN startup
             serviceScope.launch {
                 ProxyTester.verifyProxy(config).onSuccess { result ->
                     TunnelStateHolder.updateExitInfo(result.exitIp, result.latencyMs)
@@ -240,18 +278,52 @@ class ProxyVpnService : VpnService() {
         val contentText = if (isConnecting) {
             "Authenticating ${config.protocol.displayName} ${config.host}:${config.port}…"
         } else {
-            "${config.protocol.displayName} • ${config.host}:${config.port}"
+            "${config.protocol.displayName} • ${config.host}:${config.port} (All Apps)"
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_vpn_notification)
             .setContentTitle(getString(R.string.notification_title_connected))
             .setContentText(contentText)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(openIntent)
             .addAction(0, getString(R.string.notification_disconnect), disconnectIntent)
             .build()
+    }
+
+    private fun persistActiveConfig(config: ProxyConfig) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putBoolean(KEY_ACTIVE, true)
+            .putString(KEY_PROTOCOL, config.protocol.name)
+            .putString(KEY_HOST, config.host)
+            .putInt(KEY_PORT, config.port)
+            .putString(KEY_USERNAME, config.username)
+            .putString(KEY_PASSWORD, config.password)
+            .putString(KEY_LABEL, config.label)
+            .apply()
+    }
+
+    private fun clearPersistedConfig() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply()
+    }
+
+    private fun loadPersistedConfig(): ProxyConfig? {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        if (!prefs.getBoolean(KEY_ACTIVE, false)) return null
+        val host = prefs.getString(KEY_HOST, null)?.trim().orEmpty()
+        val port = prefs.getInt(KEY_PORT, 0)
+        if (host.isEmpty() || port !in 1..65535) return null
+        return ProxyConfig(
+            protocol = ProxyProtocol.fromString(prefs.getString(KEY_PROTOCOL, null)),
+            host = host,
+            port = port,
+            username = prefs.getString(KEY_USERNAME, "").orEmpty(),
+            password = prefs.getString(KEY_PASSWORD, "").orEmpty(),
+            label = prefs.getString(KEY_LABEL, "").orEmpty()
+        )
     }
 
     private fun tearDownEngineOnly() {
@@ -281,6 +353,7 @@ class ProxyVpnService : VpnService() {
     }
 
     override fun onRevoke() {
+        clearPersistedConfig()
         stopVpnTunnel("VPN permission revoked by system.")
         stopSelf()
         super.onRevoke()

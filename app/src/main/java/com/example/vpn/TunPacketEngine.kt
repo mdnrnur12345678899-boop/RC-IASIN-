@@ -94,7 +94,9 @@ class TunPacketEngine(
                     if (len < 0) break
                     continue
                 }
-                handleIpPacket(buffer, len)
+                runCatching {
+                    handleIpPacket(buffer, len)
+                }
             }
         }
 
@@ -150,6 +152,10 @@ class TunPacketEngine(
     private fun handleIpPacket(pkt: ByteArray, len: Int) {
         if (len < 20) return
         val version = (pkt[0].toInt() ushr 4) and 0x0F
+        if (version == 6) {
+            PacketUtils.buildIpv6TcpRst(pkt, len)?.let { rst -> writeToTun(rst) }
+            return
+        }
         if (version != 4) return
 
         val ihl = (pkt[0].toInt() and 0x0F) * 4
@@ -435,6 +441,11 @@ class TunPacketEngine(
                 } catch (_: Exception) {
                     // Ignore transient DNS failure
                 }
+            }
+        } else {
+            // Fast-fail non-DNS UDP (e.g., QUIC on UDP:443) so apps switch to TCP immediately
+            PacketUtils.buildIcmpPortUnreachable(pkt, ihl, totalLen)?.let { icmp ->
+                writeToTun(icmp)
             }
         }
     }

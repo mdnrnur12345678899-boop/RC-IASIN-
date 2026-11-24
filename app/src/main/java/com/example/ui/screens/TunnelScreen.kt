@@ -1,5 +1,11 @@
 package com.example.ui.screens
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -21,10 +27,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Label
+import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Key
-import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.rounded.Add
@@ -47,8 +54,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -295,7 +304,7 @@ fun TunnelScreen(
                     placeholder = { Text(stringResource(R.string.hint_profile_name)) },
                     leadingIcon = {
                         Icon(
-                            imageVector = Icons.Outlined.Label,
+                            imageVector = Icons.AutoMirrored.Outlined.Label,
                             contentDescription = null
                         )
                     },
@@ -368,7 +377,72 @@ fun TunnelScreen(
             }
         }
 
+        BackgroundKeepAliveBanner()
+
         Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun BackgroundKeepAliveBanner() {
+    val context = LocalContext.current
+    val isUnrestricted = remember(context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.isIgnoringBatteryOptimizations(context.packageName) == true
+        } else {
+            true
+        }
+    }
+
+    if (!isUnrestricted) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.BatteryChargingFull,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Keep Active in Background",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Set Battery Saver to Unrestricted so your phone doesn't stop RC Proxy when switching apps.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                FilledTonalButton(
+                    onClick = {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        runCatching { context.startActivity(intent) }
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("battery_settings_button")
+                ) {
+                    Text("Settings")
+                }
+            }
+        }
     }
 }
 

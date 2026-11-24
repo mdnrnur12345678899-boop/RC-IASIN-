@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.update
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 enum class TunnelStatus {
     DISCONNECTED,
@@ -51,8 +52,10 @@ object TunnelStateHolder {
     private val _logs = MutableStateFlow<List<TunnelLogEntry>>(emptyList())
     val logs: StateFlow<List<TunnelLogEntry>> = _logs.asStateFlow()
 
-    private var nextLogId = 1L
-    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
+    private val nextLogId = AtomicLong(1L)
+    private val threadLocalFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
+    }
 
     fun setConnecting(config: ProxyConfig) {
         _state.value = TunnelRuntimeState(
@@ -129,9 +132,10 @@ object TunnelStateHolder {
     }
 
     fun log(level: LogLevel, message: String) {
+        val formatter = threadLocalFormat.get() ?: SimpleDateFormat("HH:mm:ss", Locale.US)
         val entry = TunnelLogEntry(
-            id = nextLogId++,
-            timeLabel = timeFormat.format(Date()),
+            id = nextLogId.getAndIncrement(),
+            timeLabel = formatter.format(Date()),
             level = level,
             message = message
         )
