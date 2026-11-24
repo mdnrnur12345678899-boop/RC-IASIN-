@@ -1,0 +1,30 @@
+<resources>
+    <string name="app_name">NetRelay</string>
+    <string name="tab_tunnel">টানেল</string>
+    <string name="tab_profiles">প্রোফাইল</string>
+    <string name="tab_logs">লগ</string>
+
+    <string name="status_disconnected">সংযোগ বিচ্ছিন্ন</string>
+    <string name="status_connecting">সংযুক্ত হচ্ছে…</string>
+    <string name="status_connected">প্রক্সি সংযুক্ত</string>
+    <string name="status_error">সংযোগ ব্যর্থ হয়েছে</string>
+
+    <string name="action_connect">প্রক্সি কানেক্ট করুন</string>
+    <string name="action_disconnect">ডিসকানেক্ট করুন</string>
+    <string name="action_test_proxy">প্রক্সি যাচাই করুন</string>
+    <string name="action_save_profile">সেভ করুন</string>
+    <string name="action_new_profile">নতুন</string>
+    <string name="action_clear_logs">লগ মুছুন</string>
+    <string name="action_delete">মুছুন</string>
+
+    <string name="label_protocol">প্রোটোকল</string>
+    <string name="label_profile_name">প্রোফাইলের নাম (ঐচ্ছিক)</string>
+    <string name="label_server_host">প্রক্সি সার্ভার / IP</string>
+    <string name="label_port">পোর্ট (Port)</string>
+    <string name="label_username">ইউজারনেম (ঐচ্ছিক)</string>
+    <string name="label_password">পাসওয়ার্ড (ঐচ্ছিক)</string>
+
+    <string name="error_empty_host">সঠিক প্রক্সি সার্ভার IP বা হোস্টনেম লিখুন।</string>
+    <string name="error_invalid_port">পোর্ট ১ থেকে ৬৫৫৩৫ এর মধ্যে হতে হবে।</string>
+    <string name="error_vpn_denied">সিস্টেম VPN অনুমতি দেওয়া হয়নি।</string>
+</resources>

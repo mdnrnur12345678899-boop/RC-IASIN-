@@ -1,0 +1,59 @@
+<resources>
+    <string name="app_name">NetRelay</string>
+    <string name="tab_tunnel">Tunnel</string>
+    <string name="tab_profiles">Profiles</string>
+    <string name="tab_logs">Diagnostics</string>
+
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_connected">Protected &amp; Routed</string>
+    <string name="status_error">Connection Failed</string>
+
+    <string name="action_connect">Connect Proxy</string>
+    <string name="action_disconnect">Disconnect</string>
+    <string name="action_test_proxy">Verify Proxy</string>
+    <string name="action_save_profile">Save Profile</string>
+    <string name="action_new_profile">New</string>
+    <string name="action_clear_logs">Clear Logs</string>
+    <string name="action_delete">Delete</string>
+
+    <string name="label_protocol">Protocol</string>
+    <string name="label_profile_name">Profile Label (optional)</string>
+    <string name="label_server_host">Proxy Server / IP</string>
+    <string name="label_port">Port</string>
+    <string name="label_username">Username (optional)</string>
+    <string name="label_password">Password (optional)</string>
+
+    <string name="hint_profile_name">e.g. Singapore SOCKS5</string>
+    <string name="hint_server_host">e.g. 192.168.1.50 or proxy.host.com</string>
+    <string name="hint_port">1080</string>
+    <string name="hint_username">proxy_user</string>
+    <string name="hint_password">••••••••</string>
+
+    <string name="metric_download">Download</string>
+    <string name="metric_upload">Upload</string>
+    <string name="metric_sockets">Active</string>
+    <string name="metric_duration">Uptime</string>
+    <string name="metric_exit_ip">Exit IP</string>
+    <string name="metric_latency">Ping</string>
+
+    <string name="error_empty_host">Please enter a valid proxy server IP or hostname.</string>
+    <string name="error_invalid_port">Port must be between 1 and 65535.</string>
+    <string name="error_vpn_denied">VPN permission was denied by the system.</string>
+
+    <string name="empty_profiles_title">No Saved Proxy Profiles</string>
+    <string name="empty_profiles_subtitle">Enter a server, port, username, and password in the Tunnel tab and tap Save Profile for one-tap switching.</string>
+    <string name="empty_logs_title">No Tunnel Events Yet</string>
+    <string name="empty_logs_subtitle">Run Verify Proxy or Connect Proxy to inspect live handshakes, DNS queries, and socket telemetry.</string>
+
+    <string name="notification_channel_name">Proxy Tunnel Status</string>
+    <string name="notification_channel_desc">Shows active SOCKS5/HTTP proxy VPN connection status</string>
+    <string name="notification_title_connected">NetRelay Proxy Active</string>
+    <string name="notification_disconnect">Disconnect</string>
+
+    <string name="cd_toggle_password">Toggle password visibility</string>
+    <string name="cd_hero_mesh">Network relay background pattern</string>
+    <string name="cd_protocol_icon">Proxy protocol</string>
+    <string name="cd_delete_profile">Delete saved profile</string>
+    <string name="cd_load_profile">Load and connect profile</string>
+</resources>
