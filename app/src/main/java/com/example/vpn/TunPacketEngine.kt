@@ -4,6 +4,7 @@ import android.os.ParcelFileDescriptor
 import com.example.data.ProxyConfig
 import com.example.network.ProxyException
 import com.example.network.ProxyHandshake
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,6 +13,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.FileInputStream
@@ -57,7 +60,7 @@ class TunPacketEngine(
         @Volatile var socket: Socket? = null
         @Volatile var lastActivityMs: Long = System.currentTimeMillis()
         @Volatile var clientFinReceived: Boolean = false
-        val writeChannel = Channel<ByteArray>(512)
+        val writeChannel = Channel<ByteArray>(256)
         val outOfOrder = TreeMap<Long, ByteArray>()
         val seqLock = Any()
     }
@@ -68,7 +71,15 @@ class TunPacketEngine(
     )
 
     private val running = AtomicBoolean(true)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        TunnelStateHolder.log(
+            LogLevel.WARN,
+            "Tunnel worker recovered: ${throwable.message ?: throwable::class.java.simpleName}"
+        )
+    }
+    private val ioDispatcher = Dispatchers.IO.limitedParallelism(48)
+    private val scope = CoroutineScope(SupervisorJob() + ioDispatcher + exceptionHandler)
+    private val dnsSemaphore = Semaphore(6)
     private val sessions = ConcurrentHashMap<SessionKey, TcpSession>()
     private val dnsCache = ConcurrentHashMap<String, CachedDns>()
     private val writeLock = Any()
@@ -78,16 +89,14 @@ class TunPacketEngine(
 
     private val bytesIn = AtomicLong(0L)
     private val bytesOut = AtomicLong(0L)
-    private val authFailureReported = AtomicBoolean(false)
 
     fun start() {
-        // Packet reader loop
         scope.launch {
             val buffer = ByteArray(32767)
             while (running.get() && isActive) {
                 val len = try {
                     tunInput.read(buffer)
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     break
                 }
                 if (len <= 0) {
@@ -100,7 +109,6 @@ class TunPacketEngine(
             }
         }
 
-        // 1-second telemetry & stale session reaper
         scope.launch {
             var prevIn = 0L
             var prevOut = 0L
@@ -117,7 +125,7 @@ class TunPacketEngine(
                 val iterator = sessions.entries.iterator()
                 while (iterator.hasNext()) {
                     val entry = iterator.next()
-                    if (now - entry.value.lastActivityMs > 120_000L) {
+                    if (now - entry.value.lastActivityMs > 90_000L) {
                         closeSession(entry.key, entry.value, sendRst = false)
                     }
                 }
@@ -197,6 +205,20 @@ class TunPacketEngine(
                 runCatching { old.socket?.close() }
             }
 
+            if (sessions.size >= 128) {
+                val rstPkt = PacketUtils.buildTcpPacket(
+                    srcIp = dstIp,
+                    srcPort = dstPort,
+                    dstIp = srcIp,
+                    dstPort = srcPort,
+                    seqNum = 0L,
+                    ackNum = (seqNum + 1L) and 0xFFFFFFFFL,
+                    flags = PacketUtils.TCP_RST or PacketUtils.TCP_ACK
+                )
+                writeToTun(rstPkt)
+                return
+            }
+
             val session = TcpSession(
                 key = key,
                 clientNextSeq = (seqNum + 1L) and 0xFFFFFFFFL,
@@ -230,8 +252,8 @@ class TunPacketEngine(
                         sendAck(session)
                     }
                     diff < 0L -> {
-                        val overlap = (-diff).toInt()
-                        if (overlap < payload.size) {
+                        if (-diff < payload.size.toLong()) {
+                            val overlap = (-diff).toInt()
                             val tail = payload.copyOfRange(overlap, payload.size)
                             session.writeChannel.trySend(tail)
                             session.clientNextSeq = (session.clientNextSeq + tail.size) and 0xFFFFFFFFL
@@ -240,7 +262,7 @@ class TunPacketEngine(
                         sendAck(session)
                     }
                     diff in 1L..65536L -> {
-                        if (session.outOfOrder.size < 32) {
+                        if (session.outOfOrder.size < 24) {
                             session.outOfOrder[seqNum] = payload
                         }
                         sendAck(session)
@@ -289,6 +311,7 @@ class TunPacketEngine(
         val dstPort = session.key.dstPort
 
         scope.launch {
+            var writerJob: kotlinx.coroutines.Job? = null
             try {
                 val socket = ProxyHandshake.connectViaProxy(
                     config = config,
@@ -316,7 +339,6 @@ class TunPacketEngine(
                     "TCP -> $dstHost:$dstPort via ${config.protocol.displayName}"
                 )
 
-                // Send SYN-ACK with MSS=1400 to prevent MTU fragmentation
                 val synAck = PacketUtils.buildTcpPacket(
                     srcIp = session.key.dstIp,
                     srcPort = session.key.dstPort,
@@ -330,19 +352,17 @@ class TunPacketEngine(
                 session.serverSeq = (session.serverSeq + 1L) and 0xFFFFFFFFL
                 writeToTun(synAck)
 
-                // Dedicated sequential FIFO writer coroutine for this TCP socket
-                val writerJob = launch {
-                    val out = socket.getOutputStream()
+                writerJob = launch {
                     try {
+                        val out = socket.getOutputStream()
                         for (chunk in session.writeChannel) {
                             out.write(chunk)
                             out.flush()
                             bytesOut.addAndGet(chunk.size.toLong())
                             session.lastActivityMs = System.currentTimeMillis()
                         }
-                        // Client closed write side cleanly (FIN)
                         runCatching { socket.shutdownOutput() }
-                    } catch (_: Exception) {
+                    } catch (_: Throwable) {
                         closeSession(session.key, session, sendRst = true)
                     }
                 }
@@ -386,11 +406,11 @@ class TunPacketEngine(
                 }
                 closeSession(session.key, session, sendRst = false)
             } catch (e: ProxyException.AuthFailed) {
+                writerJob?.cancel()
                 closeSession(session.key, session, sendRst = true)
-                if (authFailureReported.compareAndSet(false, true)) {
-                    onFatalAuthFailure(e.message ?: "Proxy authentication failed.")
-                }
-            } catch (_: Exception) {
+                TunnelStateHolder.log(LogLevel.WARN, "Proxy auth rejected on $dstHost:$dstPort: ${e.message}")
+            } catch (_: Throwable) {
+                writerJob?.cancel()
                 closeSession(session.key, session, sendRst = true)
             }
         }
@@ -423,27 +443,24 @@ class TunPacketEngine(
 
             val dnsServerIp = PacketUtils.ipIntToString(dstIp)
             scope.launch {
-                try {
-                    bytesOut.addAndGet(dnsQuery.size.toLong())
-                    val dnsResp = resolveDnsThroughProxy(dnsQuery, dnsServerIp)
-                    if (dnsResp != null && dnsResp.size >= 12) {
-                        bytesIn.addAndGet(dnsResp.size.toLong())
-                        dnsCache[cacheKey] = CachedDns(
-                            responseWithoutTxId = dnsResp.copyOfRange(2, dnsResp.size),
-                            expiresAtMs = System.currentTimeMillis() + 60_000L
-                        )
-                        writeDnsUdpReply(dstIp, srcIp, srcPort, dnsResp)
+                dnsSemaphore.withPermit {
+                    try {
+                        bytesOut.addAndGet(dnsQuery.size.toLong())
+                        val dnsResp = resolveDnsThroughProxy(dnsQuery, dnsServerIp)
+                        if (dnsResp != null && dnsResp.size >= 12) {
+                            bytesIn.addAndGet(dnsResp.size.toLong())
+                            dnsCache[cacheKey] = CachedDns(
+                                responseWithoutTxId = dnsResp.copyOfRange(2, dnsResp.size),
+                                expiresAtMs = System.currentTimeMillis() + 60_000L
+                            )
+                            writeDnsUdpReply(dstIp, srcIp, srcPort, dnsResp)
+                        }
+                    } catch (_: Throwable) {
+                        // Ignore transient DNS failure
                     }
-                } catch (e: ProxyException.AuthFailed) {
-                    if (authFailureReported.compareAndSet(false, true)) {
-                        onFatalAuthFailure(e.message ?: "Proxy authentication failed.")
-                    }
-                } catch (_: Exception) {
-                    // Ignore transient DNS failure
                 }
             }
         } else {
-            // Fast-fail non-DNS UDP (e.g., QUIC on UDP:443) so apps switch to TCP immediately
             PacketUtils.buildIcmpPortUnreachable(pkt, ihl, totalLen)?.let { icmp ->
                 writeToTun(icmp)
             }
@@ -462,11 +479,8 @@ class TunPacketEngine(
     }
 
     private fun resolveDnsThroughProxy(dnsQuery: ByteArray, fallbackDnsIp: String): ByteArray? {
-        // 1. Primary: DNS-over-HTTPS via 1.1.1.1:443 (works on BOTH HTTP CONNECT and SOCKS5 proxies)
         queryDoH("1.1.1.1", "1.1.1.1", dnsQuery)?.let { return it }
-        // 2. Secondary: DNS-over-HTTPS via dns.google:443
         queryDoH("dns.google", "dns.google", dnsQuery)?.let { return it }
-        // 3. Fallback: DNS-over-TCP via port 53
         return queryDnsOverTcp(fallbackDnsIp, dnsQuery)
     }
 
@@ -500,20 +514,66 @@ class TunPacketEngine(
                 out.write(dnsQuery)
                 out.flush()
 
-                val allBytes = tls.getInputStream().readBytes()
-                val sepIndex = findHeaderEnd(allBytes) ?: return@runCatching null
-                val headerText = String(allBytes, 0, sepIndex, StandardCharsets.ISO_8859_1)
-                if (!headerText.lineSequence().firstOrNull().orEmpty().contains(" 200")) {
-                    return@runCatching null
-                }
-                val body = allBytes.copyOfRange(sepIndex + 4, allBytes.size)
-                if (headerText.contains("Transfer-Encoding: chunked", ignoreCase = true)) {
-                    decodeChunkedBody(body)
-                } else {
-                    body
-                }
+                readHttpResponseBody(tls.getInputStream())
             }
         }.getOrNull()
+    }
+
+    private fun readHttpResponseBody(input: InputStream): ByteArray? {
+        val headerBuf = ByteArray(8192)
+        var pos = 0
+        while (pos < headerBuf.size) {
+            val b = input.read()
+            if (b == -1) return null
+            headerBuf[pos++] = b.toByte()
+            if (pos >= 4 &&
+                headerBuf[pos - 4] == '\r'.code.toByte() &&
+                headerBuf[pos - 3] == '\n'.code.toByte() &&
+                headerBuf[pos - 2] == '\r'.code.toByte() &&
+                headerBuf[pos - 1] == '\n'.code.toByte()
+            ) {
+                break
+            }
+        }
+        val headerText = String(headerBuf, 0, pos, StandardCharsets.ISO_8859_1)
+        val lines = headerText.lines()
+        if (!lines.firstOrNull().orEmpty().contains(" 200")) return null
+
+        val contentLength = lines.firstOrNull { it.startsWith("Content-Length:", ignoreCase = true) }
+            ?.substringAfter(':')?.trim()?.toIntOrNull()
+
+        return when {
+            contentLength != null && contentLength in 12..8192 -> readExactBytes(input, contentLength)
+            headerText.contains("Transfer-Encoding: chunked", ignoreCase = true) -> readChunkedBody(input)
+            else -> input.readBytes()
+        }
+    }
+
+    private fun readChunkedBody(input: InputStream): ByteArray {
+        val out = ByteArrayOutputStream()
+        while (true) {
+            val line = readAsciiLine(input) ?: break
+            val sizeHex = line.substringBefore(';').trim()
+            val chunkSize = sizeHex.toIntOrNull(16) ?: break
+            if (chunkSize == 0) break
+            if (chunkSize > 16384) break
+            out.write(readExactBytes(input, chunkSize))
+            // consume trailing CRLF
+            input.read()
+            input.read()
+        }
+        return out.toByteArray()
+    }
+
+    private fun readAsciiLine(input: InputStream): String? {
+        val sb = StringBuilder()
+        while (true) {
+            val b = input.read()
+            if (b == -1) return if (sb.isEmpty()) null else sb.toString()
+            if (b == '\n'.code) break
+            if (b != '\r'.code) sb.append(b.toChar())
+        }
+        return sb.toString()
     }
 
     private fun queryDnsOverTcp(dnsServerIp: String, dnsQuery: ByteArray): ByteArray? {
@@ -540,41 +600,6 @@ class TunPacketEngine(
                 if (respLen in 12..4096) readExactBytes(input, respLen) else null
             }
         }.getOrNull()
-    }
-
-    private fun findHeaderEnd(data: ByteArray): Int? {
-        for (i in 0 until data.size - 3) {
-            if (data[i] == '\r'.code.toByte() &&
-                data[i + 1] == '\n'.code.toByte() &&
-                data[i + 2] == '\r'.code.toByte() &&
-                data[i + 3] == '\n'.code.toByte()
-            ) {
-                return i
-            }
-        }
-        return null
-    }
-
-    private fun decodeChunkedBody(raw: ByteArray): ByteArray {
-        val out = ByteArrayOutputStream()
-        var pos = 0
-        while (pos < raw.size) {
-            var lineEnd = pos
-            while (lineEnd < raw.size - 1 &&
-                !(raw[lineEnd] == '\r'.code.toByte() && raw[lineEnd + 1] == '\n'.code.toByte())
-            ) {
-                lineEnd++
-            }
-            if (lineEnd >= raw.size - 1) break
-            val sizeLine = String(raw, pos, lineEnd - pos, StandardCharsets.US_ASCII)
-                .substringBefore(';').trim()
-            val chunkSize = sizeLine.toIntOrNull(16) ?: break
-            pos = lineEnd + 2
-            if (chunkSize == 0 || pos + chunkSize > raw.size) break
-            out.write(raw, pos, chunkSize)
-            pos += chunkSize + 2
-        }
-        return out.toByteArray()
     }
 
     private fun closeSession(key: SessionKey, session: TcpSession, sendRst: Boolean) {
@@ -616,7 +641,7 @@ class TunPacketEngine(
         var offset = 0
         while (offset < count) {
             val read = input.read(buf, offset, count - offset)
-            if (read == -1) throw EOFException("Unexpected EOF during DNS-over-TCP read.")
+            if (read == -1) throw EOFException("Unexpected EOF during stream read.")
             offset += read
         }
         return buf

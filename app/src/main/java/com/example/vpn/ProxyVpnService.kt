@@ -70,11 +70,20 @@ class ProxyVpnService : VpnService() {
             val intent = Intent(context, ProxyVpnService::class.java).apply {
                 action = ACTION_DISCONNECT
             }
-            context.startService(intent)
+            val started = runCatching { context.startService(intent) }.isSuccess
+            if (!started) {
+                TunnelStateHolder.setDisconnected("Proxy disconnected.")
+            }
         }
     }
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val serviceErrorHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+        TunnelStateHolder.log(
+            LogLevel.ERROR,
+            "VPN service error: ${throwable.message ?: throwable::class.java.simpleName}"
+        )
+    }
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + serviceErrorHandler)
     private var connectJob: Job? = null
     private var tunInterface: ParcelFileDescriptor? = null
     private var packetEngine: TunPacketEngine? = null
@@ -112,7 +121,14 @@ class ProxyVpnService : VpnService() {
                 // Restored by OS under START_STICKY while running in background
                 val restored = loadPersistedConfig()
                 if (restored != null) {
-                    startForegroundWithNotification(restored, isConnecting = true)
+                    val fgsOk = runCatching {
+                        startForegroundWithNotification(restored, isConnecting = true)
+                    }.isSuccess
+                    if (!fgsOk) {
+                        clearPersistedConfig()
+                        stopSelf()
+                        return START_NOT_STICKY
+                    }
                     establishTunnel(restored)
                 } else {
                     stopSelf()
@@ -210,7 +226,7 @@ class ProxyVpnService : VpnService() {
             packetEngine = engine
             engine.start()
 
-            startForegroundWithNotification(config, isConnecting = false)
+            updateNotification(config, isConnecting = false)
             TunnelStateHolder.setConnected(
                 config = config,
                 exitIp = null,
@@ -240,6 +256,13 @@ class ProxyVpnService : VpnService() {
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun updateNotification(config: ProxyConfig, isConnecting: Boolean) {
+        runCatching {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm?.notify(NOTIFICATION_ID, buildNotification(config, isConnecting))
         }
     }
 

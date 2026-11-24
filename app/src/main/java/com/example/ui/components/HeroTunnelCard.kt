@@ -186,7 +186,7 @@ fun HeroTunnelCard(
                         if (isConnected || isConnecting) {
                             Canvas(modifier = Modifier.fillMaxSize()) {
                                 drawCircle(
-                                    color = accentColor.copy(alpha = pulseAlpha),
+                                    color = accentColor.copy(alpha = pulseAlpha.coerceIn(0f, 1f)),
                                     radius = (size.minDimension / 2f) * pulseRadius,
                                     style = Stroke(width = 3.dp.toPx())
                                 )
