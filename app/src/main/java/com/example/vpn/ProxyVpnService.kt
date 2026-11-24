@@ -52,7 +52,11 @@ class ProxyVpnService : VpnService() {
         private const val CHANNEL_ID = "rcproxy_tunnel"
         private const val NOTIFICATION_ID = 1001
 
+        @Volatile
+        private var activeInstance: ProxyVpnService? = null
+
         fun startConnect(context: Context, config: ProxyConfig) {
+            AppIntegrityGuard.enforceOrCrash(context)
             val intent = Intent(context, ProxyVpnService::class.java).apply {
                 action = ACTION_CONNECT
                 putExtra(EXTRA_PROTOCOL, config.protocol.name)
@@ -70,6 +74,11 @@ class ProxyVpnService : VpnService() {
         }
 
         fun stopTunnel(context: Context) {
+            val instance = activeInstance
+            if (instance != null) {
+                instance.disconnectImmediate()
+                return
+            }
             val intent = Intent(context, ProxyVpnService::class.java).apply {
                 action = ACTION_DISCONNECT
             }
@@ -91,12 +100,22 @@ class ProxyVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     private var packetEngine: TunPacketEngine? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        activeInstance = this
+    }
+
+    private fun disconnectImmediate() {
+        clearPersistedConfig()
+        stopVpnTunnel("Proxy disconnected by user.")
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        AppIntegrityGuard.enforceOrCrash(this)
         when (intent?.action) {
             ACTION_DISCONNECT -> {
-                clearPersistedConfig()
-                stopVpnTunnel("Proxy disconnected by user.")
-                stopSelf()
+                disconnectImmediate()
                 return START_NOT_STICKY
             }
             ACTION_CONNECT -> {
@@ -154,17 +173,7 @@ class ProxyVpnService : VpnService() {
         TunnelStateHolder.setConnecting(config)
 
         connectJob = serviceScope.launch {
-            val integrity = AppIntegrityGuard.verify(this@ProxyVpnService)
-            if (!integrity.isValid) {
-                clearPersistedConfig()
-                TunnelStateHolder.setError(
-                    integrity.reason ?: "App integrity verification failed.",
-                    config
-                )
-                stopForegroundCompat()
-                stopSelf()
-                return@launch
-            }
+            AppIntegrityGuard.enforceOrCrash(this@ProxyVpnService)
 
             val handshakeCheck = runCatching {
                 val testStart = System.currentTimeMillis()
@@ -435,6 +444,9 @@ class ProxyVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         tearDownEngineOnly()
         serviceScope.cancel()
         super.onDestroy()

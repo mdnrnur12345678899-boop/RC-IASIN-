@@ -48,6 +48,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".vpn.VpnConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service
             android:name=".vpn.ProxyVpnService"
             android:exported="false"

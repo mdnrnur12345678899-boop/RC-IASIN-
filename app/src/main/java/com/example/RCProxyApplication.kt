@@ -1,12 +1,14 @@
 package com.example
 
 import android.app.Application
+import com.example.security.AppIntegrityGuard
 import com.example.vpn.LogLevel
 import com.example.vpn.TunnelStateHolder
 
 class RCProxyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        AppIntegrityGuard.enforceOrCrash(this)
 
         val prefs = getSharedPreferences(CRASH_PREFS, MODE_PRIVATE)
         val previousCrash = prefs.getString(KEY_LAST_CRASH, null)

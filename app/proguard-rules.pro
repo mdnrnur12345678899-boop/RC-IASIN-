@@ -17,6 +17,7 @@
 -keep public class com.example.MainActivity
 -keep public class com.example.vpn.ProxyVpnService
 -keep public class com.example.vpn.FloatingBubbleService
+-keep public class com.example.vpn.VpnConsentActivity
 
 # Silence third-party optional annotation warnings in OkHttp/Okio
 -dontwarn javax.annotation.**

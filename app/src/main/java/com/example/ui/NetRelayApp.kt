@@ -67,6 +67,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
 import com.example.data.AppRoutingMode
+import com.example.security.AppIntegrityGuard
 import com.example.ui.components.AppPickerDialog
 import com.example.ui.components.TelegramJoinDialog
 import com.example.ui.screens.DiagnosticsScreen
@@ -366,7 +367,10 @@ fun NetRelayApp(
             TelegramJoinDialog(
                 onJoinClick = {
                     viewModel.dismissTelegramPrompt(dontShowAgain = false)
-                    val tgIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/rciasin")).apply {
+                    val tgIntent = Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse(AppIntegrityGuard.telegramUrl())
+                    ).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     runCatching { context.startActivity(tgIntent) }

@@ -11,7 +11,7 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
-fun readExpectedCertSha256(rootDir: File): String {
+fun readMaskedCertSha256(rootDir: File): String {
   val digests = linkedSetOf<String>()
   fun collectFromKeystore(file: File, storePass: String?, aliasFilter: String?) {
     if (!file.exists() || storePass == null) return
@@ -34,7 +34,13 @@ fun readExpectedCertSha256(rootDir: File): String {
   collectFromKeystore(File(rootDir, "debug.keystore"), "android", "androiddebugkey")
   val releasePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
   collectFromKeystore(File(releasePath), System.getenv("STORE_PASSWORD"), "upload")
-  return digests.joinToString(",")
+  val raw = digests.joinToString(",")
+  if (raw.isEmpty()) return ""
+  val mask = intArrayOf(0x5A, 0x3C, 0x71, 0x19, 0x4F, 0x2D, 0x63, 0x0B)
+  val rawBytes = raw.toByteArray(Charsets.UTF_8)
+  return rawBytes.mapIndexed { idx, b ->
+    "%02X".format(Locale.US, (b.toInt() and 0xFF) xor mask[idx % mask.size])
+  }.joinToString("")
 }
 
 android {
@@ -49,7 +55,7 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    buildConfigField("String", "EXPECTED_CERT_SHA256", "\"${readExpectedCertSha256(rootDir)}\"")
+    buildConfigField("String", "EXPECTED_CERT_MASKED", "\"${readMaskedCertSha256(rootDir)}\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

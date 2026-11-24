@@ -128,31 +128,37 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
             state.copy(protocol = protocol, portText = updatedPort)
         }
         _testState.value = ProxyTestUiState.Idle
+        syncDraftConfigForBubble()
     }
 
     fun onLabelChange(value: String) {
         _formState.update { it.copy(label = value) }
+        syncDraftConfigForBubble()
     }
 
     fun onHostChange(value: String) {
         _formState.update { it.copy(host = value, hostError = null) }
         _testState.value = ProxyTestUiState.Idle
+        syncDraftConfigForBubble()
     }
 
     fun onPortChange(value: String) {
         val filtered = value.filter { it.isDigit() }.take(5)
         _formState.update { it.copy(portText = filtered, portError = null) }
         _testState.value = ProxyTestUiState.Idle
+        syncDraftConfigForBubble()
     }
 
     fun onUsernameChange(value: String) {
         _formState.update { it.copy(username = value) }
         _testState.value = ProxyTestUiState.Idle
+        syncDraftConfigForBubble()
     }
 
     fun onPasswordChange(value: String) {
         _formState.update { it.copy(password = value) }
         _testState.value = ProxyTestUiState.Idle
+        syncDraftConfigForBubble()
     }
 
     fun togglePasswordVisibility() {
@@ -175,6 +181,7 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
             password = profile.password
         )
         _testState.value = ProxyTestUiState.Idle
+        syncDraftConfigForBubble()
     }
 
     fun saveCurrentProfile() {

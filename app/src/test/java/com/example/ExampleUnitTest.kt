@@ -146,4 +146,20 @@ class ExampleUnitTest {
         assertEquals(1400, PacketUtils.readU16(pkt, 42))
         assertArrayEquals("hi".toByteArray(), pkt.copyOfRange(44, 46))
     }
+
+    @Test
+    fun integrity_guard_decodes_protected_brand_and_telegram_url() {
+        assertEquals("https://t.me/rciasin", com.example.security.AppIntegrityGuard.telegramUrl())
+        assertEquals("RC Proxy", com.example.security.AppIntegrityGuard.brandTitle())
+        assertEquals("RC PROXY", com.example.security.AppIntegrityGuard.brandUpper())
+    }
+
+    @Test
+    fun integrity_guard_parses_real_apk_sig_block_when_built() {
+        val apkFile = java.io.File("build/outputs/apk/debug/app-debug.apk")
+        if (apkFile.exists()) {
+            val hashes = com.example.security.AppIntegrityGuard.readRawApkSigBlockV2V3Hashes(apkFile)
+            assertTrue("Expected v2/v3 signing block cert hash from APK", hashes.isNotEmpty())
+        }
+    }
 }

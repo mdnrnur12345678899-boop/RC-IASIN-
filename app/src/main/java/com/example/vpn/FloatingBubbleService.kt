@@ -86,6 +86,7 @@ class FloatingBubbleService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        AppIntegrityGuard.enforceOrCrash(this)
         if (intent?.action == ACTION_STOP_BUBBLE) {
             AppPreferences.setBubbleEnabled(this, false)
             TunnelStateHolder.setBubbleRunning(false)
@@ -306,29 +307,47 @@ class FloatingBubbleService : Service() {
     }
 
     private fun onBubbleTapped() {
-        val status = TunnelStateHolder.state.value.status
-        if (status == TunnelStatus.CONNECTED || status == TunnelStatus.CONNECTING) {
-            ProxyVpnService.stopTunnel(this)
-            return
-        }
-
-        val integrity = AppIntegrityGuard.verify(this)
-        if (!integrity.isValid) {
-            Toast.makeText(this, integrity.reason ?: "Integrity check failed", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val savedConfig = AppPreferences.loadLastProxyConfig(this)
-        val prepareIntent = runCatching { VpnService.prepare(this) }.getOrNull()
-
-        if (savedConfig != null && prepareIntent == null) {
-            ProxyVpnService.startConnect(this, savedConfig)
-        } else {
-            // Either no proxy configured yet or one-time VPN permission consent is required
-            val launchIntent = Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        AppIntegrityGuard.enforceOrCrash(this)
+        serviceScope.launch(Dispatchers.IO) {
+            val status = TunnelStateHolder.state.value.status
+            if (status == TunnelStatus.CONNECTED || status == TunnelStatus.CONNECTING) {
+                ProxyVpnService.stopTunnel(this@FloatingBubbleService)
+                return@launch
             }
-            runCatching { startActivity(launchIntent) }
+
+            val savedConfig = AppPreferences.loadLastProxyConfig(this@FloatingBubbleService)
+            if (savedConfig == null) {
+                launch(Dispatchers.Main) {
+                    Toast.makeText(
+                        this@FloatingBubbleService,
+                        "Enter proxy Server & Port in RC Proxy first.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                return@launch
+            }
+
+            val prepareIntent = runCatching { VpnService.prepare(this@FloatingBubbleService) }.getOrNull()
+            if (prepareIntent == null) {
+                val started = runCatching {
+                    ProxyVpnService.startConnect(this@FloatingBubbleService, savedConfig)
+                }.isSuccess
+                if (!started) {
+                    launch(Dispatchers.Main) {
+                        Toast.makeText(
+                            this@FloatingBubbleService,
+                            "Could not start proxy service from background.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            } else {
+                // Only pop the system VPN permission dialog via translucent activity, never MainActivity
+                val consentIntent = Intent(this@FloatingBubbleService, VpnConsentActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { startActivity(consentIntent) }
+            }
         }
     }
 
