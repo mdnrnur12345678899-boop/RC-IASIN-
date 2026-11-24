@@ -104,6 +104,7 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             val last = repository.getLastUsed()
+                ?: AppDatabase.getInstance(application).proxyProfileDao().getLatestAny()
             if (last != null) {
                 populateFromProfile(last)
             }

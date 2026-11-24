@@ -14,6 +14,9 @@ interface ProxyProfileDao {
     @Query("SELECT * FROM proxy_profiles WHERE isLastUsed = 1 LIMIT 1")
     suspend fun getLastUsed(): ProxyProfile?
 
+    @Query("SELECT * FROM proxy_profiles ORDER BY isLastUsed DESC, updatedAt DESC LIMIT 1")
+    suspend fun getLatestAny(): ProxyProfile?
+
     @Query("SELECT * FROM proxy_profiles WHERE host = :host AND port = :port AND protocol = :protocol LIMIT 1")
     suspend fun findMatching(host: String, port: Int, protocol: ProxyProtocol): ProxyProfile?
 

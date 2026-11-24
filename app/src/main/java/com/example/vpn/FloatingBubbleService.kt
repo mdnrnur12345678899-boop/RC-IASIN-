@@ -29,6 +29,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.data.AppDatabase
 import com.example.data.AppPreferences
 import com.example.security.AppIntegrityGuard
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -315,7 +316,17 @@ class FloatingBubbleService : Service() {
                 return@launch
             }
 
-            val savedConfig = AppPreferences.loadLastProxyConfig(this@FloatingBubbleService)
+            var savedConfig = AppPreferences.loadLastProxyConfig(this@FloatingBubbleService)
+            if (savedConfig == null) {
+                savedConfig = runCatching {
+                    AppDatabase.getInstance(this@FloatingBubbleService)
+                        .proxyProfileDao()
+                        .getLatestAny()
+                        ?.toConfig()
+                }.getOrNull()?.also { loaded ->
+                    AppPreferences.saveLastProxyConfig(this@FloatingBubbleService, loaded)
+                }
+            }
             if (savedConfig == null) {
                 launch(Dispatchers.Main) {
                     Toast.makeText(

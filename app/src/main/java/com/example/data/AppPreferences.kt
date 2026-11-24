@@ -29,7 +29,7 @@ data class AppRoutingConfig(
 
 object AppPreferences {
     private const val APP_PREFS = "rcproxy_app_prefs"
-    private const val SERVICE_PREFS = "rcproxy_service_prefs"
+    private const val SERVICE_PREFS = "rcproxy_saved_config_prefs"
 
     private const val KEY_TELEGRAM_DISMISSED = "telegram_prompt_dismissed"
     private const val KEY_BUBBLE_ENABLED = "bubble_enabled"

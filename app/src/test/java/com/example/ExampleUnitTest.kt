@@ -152,6 +152,7 @@ class ExampleUnitTest {
         assertEquals("https://t.me/rciasin", com.example.security.AppIntegrityGuard.telegramUrl())
         assertEquals("RC Proxy", com.example.security.AppIntegrityGuard.brandTitle())
         assertEquals("RC PROXY", com.example.security.AppIntegrityGuard.brandUpper())
+        assertEquals("com.rc.proxy", com.example.security.AppIntegrityGuard.packageId())
     }
 
     @Test

@@ -40,7 +40,7 @@ class ProxyVpnService : VpnService() {
         const val EXTRA_PASSWORD = "extra_password"
         const val EXTRA_LABEL = "extra_label"
 
-        private const val PREFS_NAME = "rcproxy_service_prefs"
+        private const val PREFS_NAME = "rcproxy_active_tunnel_prefs"
         private const val KEY_ACTIVE = "is_active"
         private const val KEY_PROTOCOL = "protocol"
         private const val KEY_HOST = "host"
